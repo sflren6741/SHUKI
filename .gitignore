@@ -1,5 +1,8 @@
 # Obsidian workspace/cache (keep your own local UI state out of the repo)
-.obsidian/
+# Use .obsidian/* (not .obsidian/) so the negation below can punch through
+.obsidian/*
+# ...but publish the plugin list so Obsidian auto-prompts to install them
+!.obsidian/community-plugins.json
 
 # Claude Code local state (only agents/ and skills/ are published)
 .claude/*

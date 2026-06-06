@@ -24,7 +24,7 @@ claude -p "@orchestrator 朝のスタンドアップを生成"
 | ルーティン | 頻度 | プロンプト（例） |
 |---|---|---|
 | Morning standup | 毎朝 7:00 | `@orchestrator 朝のスタンドアップを生成` |
-| Planner reminder | 毎朝 6:30 | `@planner 期限7日前・3日前・当日のタスクをリマインド` |
+| （任意）専門エージェント定期実行 | 任意 | `@<専門エージェント> <期限リマインド等、役割に合わせて>` |
 | Inbox sweep | 数時間おき | `@orchestrator 07_Inbox/ の未処理ファイルを振り分け・プロパティ補完` |
 | Night QA | 毎日 2:00 | `@infrastructure 稼働ログを確認してサマリーを更新` |
 | Weekly review | 週次 | （対話スキル `/weekly-review` を人間が起動。無人生成しない） |

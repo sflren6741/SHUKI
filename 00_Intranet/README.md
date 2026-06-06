@@ -11,7 +11,7 @@
 | `00_Intranet/agent-runs/` | エージェント実行ログ（infrastructure が集計） |
 | `00_Intranet/monitoring/` | 稼働サマリー・セッション制限履歴 |
 | `00_Intranet/local-ai-runs/` | Local AI（Ollama）夜間処理の出力 |
-| `.claude/agents/` | Claude Code サブエージェント定義（**唯一の権威ソース・9体**） |
+| `.claude/agents/` | Claude Code サブエージェント定義（**唯一の権威ソース**。コア4体＋専門エージェントは任意追加） |
 | `02_Tasks/` | タスク管理DB（自律ピック対象） |
 | `03_Home/` | ホーム・今日のタスク |
 | `04_Areas/` | 継続的責任領域（10 Area） |
@@ -36,13 +36,9 @@
 | ----------------- | ---------------------------------------------------- |
 | 🎯 orchestrator   | 🏢 AI組織図＆RACI / ✅ タスク管理ルール / 🧠 文脈エンジン構造 / 🔄 QAサイクル |
 | 🔍 reviewer       | 🔍 レビュー文化 / 🔄 QAサイクル §10.5                          |
-| 💞 relationship   | ✅ タスク管理ルール §3.3 代筆禁止ゾーン / パートナーとの関係 Area                |
-| 🪞 self-analysis  | 自己理解 Area / 哲学・価値観                                   |
-| 🗣 english        | ✅ タスク管理ルール / 英語 Area                                 |
-| 💰 finance        | ✅ タスク管理ルール / 🔄 QAサイクル                               |
-| 📋 planner        | ✅ タスク管理ルール / 🔄 QAサイクル                               |
 | 🌐 knowledge      | CLAUDE.md（vault構造・wikilink方針）/ 00_Intranet/MOC          |
 | 🧹 infrastructure | ⚠️ 静かな故障の監視 / 🛠 Technical Setup                     |
+| `<専門エージェント>`  | ✅ タスク管理ルール / 担当 Area のハブファイル                         |
 
 ## 🧠 Local AI（Ollama）— 補助レイヤー
 

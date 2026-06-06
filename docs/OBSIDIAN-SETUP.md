@@ -3,7 +3,7 @@
 > **TL;DR (EN)** — Plugins and core settings that make this vault work: **Templater** (auto-inserts `created`/`date` and applies folder templates), **Obsidian Linter** (auto-updates `updated` on save), relative-path links, and an inbox-by-default new-note location. Set these once per device (`.obsidian/` is gitignored, so each device configures its own).
 
 このVaultを快適に回すための Obsidian 設定。一度設定すれば恒久的に効く。優先度順。
-`.obsidian/` は `.gitignore` 対象 → Obsidian 設定は git 管理されないので**各端末で個別に設定**する。
+`.obsidian/community-plugins.json` はリポに含めています。このフォルダを Obsidian で vault として開くと「**これらのプラグインを有効化しますか？**」と自動で聞いてくれます。それ以外の設定（テーマ・UIパネル位置等）は `.gitignore` 対象のため**各端末で個別に設定**してください。
 
 ---
 
