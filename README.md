@@ -94,20 +94,22 @@ Obsidian Vault（ローカルMarkdown）
 
 ## セットアップ
 
-> 下はクイックスタート。全ステップは[詳細ガイド](docs/SETUP.md)に。
+> 詳細は [docs/SETUP.md](docs/SETUP.md)。ここではエッセンスだけ。
 
-1. **Claude Code を導入** — [公式ドキュメント](https://docs.claude.com/en/docs/claude-code/overview)参照。
-2. **新規（または既存）の Obsidian vault フォルダにクローン**：
-   ```bash
-   git clone <your-repo-url> my-vault
-   cd my-vault
-   ```
-   フォルダを [Obsidian](https://obsidian.md/) で vault として開く。
-3. **Identity を埋める** — `00_Intranet/AI運用ルール集（イントラ）/🪪 Identity.md` を編集。`<...>` プレースホルダーのテンプレートです。全エージェントが最初に読むファイル。
-4. **ルールと境界を確認** — `CLAUDE.md`（最上位の運用マニュアル）と `00_Intranet/` 以下のルールに目を通し、「人間確認必須ゾーン」を自分の生活に合わせて調整。
-5. **エージェントを調整** — `.claude/agents/` のファイルが挙動の権威ソース。トリガー・制約を好みに編集し、専門エージェントを必要に応じて追加。
-6. **（任意）ルーティンをスケジュール** — スタンドアップ／週次レビュー／QA は Windows Task Scheduler で起動する想定。`CLAUDE.md` にスケジュール記載あり。`<WORKSPACE>` / `<HOME>` を自分のパスに置換。
-7. **（任意）ローカル夜間QA** — 別途 [Ollama](https://ollama.com/) のループが誤字/frontmatterを巡回。フレームワーク利用には必須ではありません。
+**手作業はこれだけ（〜10分）：**
+
+1. [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) をインストール（Anthropic アカウント・有料が必要）
+2. [Obsidian](https://obsidian.md/) をインストール
+3. このリポをクローン → Obsidian で vault として開く
+4. vault フォルダで `claude` を起動
+
+**あとはチャットで完結：**
+
+```
+/setup
+```
+
+Identity・価値観・Areas・パス設定・Obsidianプラグイン案内・自動化スクリプト生成まで、Claude Code が対話しながらすべて設定します。ファイルを直接編集する必要はありません。
 
 > フレームワークは日本語で書かれています。構造とロジックはそのまま通用するので、ルールファイルは自由にローカライズしてください。
 

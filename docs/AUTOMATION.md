@@ -2,6 +2,8 @@
 
 > **TL;DR (EN)** — Run Claude Code headlessly on a schedule (Windows Task Scheduler / cron) to generate a morning standup, a weekly review, nightly QA, and inbox routing. A small wrapper script invokes `claude -p "<prompt>"` from the vault folder. Optionally, a separate local LLM (Ollama) sweeps the vault at night for typos and broken frontmatter. None of this is required to use the system by hand.
 
+> **💡 `/setup` を使う場合** — `/setup` スキルが `.ps1` ラッパースクリプトを自動生成します。このファイルは Task Scheduler への登録手順と詳細リファレンスです。
+
 エージェントは手動（`@name`）でも使えるが、**スケジュール起動**で「朝・夜に勝手に回る」状態にすると一気に楽になる。
 
 ---
