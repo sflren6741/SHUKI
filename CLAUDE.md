@@ -1,0 +1,367 @@
+# Claude work space — AI Intranet
+
+> 📖 **新しく見に来た方へ / New here?** まず [README](README.md) を読んでください（概要・思想・セットアップ）。
+> このファイルは Claude Code が毎セッション読み込む**運用マニュアル本体**で、オーナー個人の vault に合わせて書かれています。`<...>` や `<WORKSPACE>` 等のプレースホルダーは自分の環境に置き換えて使ってください。
+> This file is the operating manual Claude Code loads every session; it is written for one person's vault. Adapt the placeholders to your own setup.
+
+ここはオーナーのAIエージェント運用イントラネット。Notionから移行したPARA構造のローカル vault。Obsidianでも編集できる構成。
+
+## 🗂 ディレクトリマップ
+
+| パス | 役割 |
+|---|---|
+| `01_Projects/` | プロジェクトハブ（`プロジェクト.md` がハブ、`プロジェクト/` 配下に各 Project .md） |
+| `00_Intranet/` | 憲法・運用ルール集（AIが必ず参照する目次） |
+| `00_Intranet/README.md` | AI向け入口ガイド・役割別必読早見表 |
+| `00_Intranet/AI運用ルール集（イントラ）/` | 個別ルール（Identity / 哲学・価値観 / デザイン言語 / QAサイクル等） |
+| `00_Intranet/agent-runs/` | エージェント実行ログ（infrastructure が集計） |
+| `00_Intranet/monitoring/` | 稼働サマリー・セッション制限履歴 |
+| `00_Intranet/local-ai-runs/` | Local AI（Ollama）夜間処理の出力先 |
+| `00_Intranet/local-ai-runs/qa/` | Local AI が検出した誤字脱字・frontmatter QA レポート（日付別） |
+| `02_Tasks/タスク管理.md` | タスク管理ハブ（inline base DB） |
+| `02_Tasks/タスク管理/タスク/` | タスクDB（各.mdが1タスク） |
+| `03_Home/` | ホーム・今日のフォーカス |
+| `04_Areas/` | 継続責任領域（`Areas.md` がハブ、各Area は `<area>.md` 単一ハブのみ・フォルダなし） |
+| `05_Resources/` | ナレッジ（`Resources.md` ハブ＋inline base DB） |
+| `05_Resources/Resources/ナレッジ/` | ナレッジDB本体（本・アニメ・ゲーム・記事など、各.mdが1エントリ）。**👤人物ノートもここ**（`type: 👤人物`） |
+| `05_Resources/Resources/概念/` | 概念ノード（繰り返し登場するテーマ・原則・洞察。グラフの意味的ハブ） |
+| `05_Resources/Resources/OCR保管庫/` | OCRで取り込んだ生データ保管 |
+| `07_Inbox/` | 未処理（`インボックス.md` ハブ＋inline base DB） |
+| `08_Archive/` | アーカイブ |
+| `09_Logs/` | 行動ログ（`ログ.md` ハブ＋inline base DB、`ログ/` サブフォルダにエントリ） |
+| `09_Logs/AI対話履歴/` | Claude Code 週次使用状況レポート |
+| `09_Logs/朝スタンドアップ/` | モーニングスタンドアップ履歴（毎朝7:00 orchestrator が `<日付>.md` を作成） |
+| `.claude/agents/` | Claude Code サブエージェント定義（**唯一の権威ソース・9体**） |
+
+## 🤖 利用可能なエージェント（9体）
+
+`@<agent-name>` または Agent ツールで起動：
+
+> ⚠️ **この一覧は要約（ナビゲーション）。** 各エージェントの正式な仕様・トリガー・制約は **`.claude/agents/<agent-name>.md` が唯一の正**。この一覧・組織図・README と食い違う場合は必ず `.claude/agents/` を信じること。ここを書き換えてもエージェントの挙動は変わらない（挙動を変えるなら `.claude/agents/` を編集する）。
+
+### 統括
+- **`@orchestrator`** — タスク振り分け・モーニングスタンドアップ・週次レビュー
+
+### Tier 1（即時運用）
+- **`@reviewer`** — 他エージェント出力・重要判断のダブルチェック（Read専用）
+- **`@relationship`** — パートナーとの記憶整理・事実確認・内省の壁打ち（代筆禁止、Read専用）
+- **`@self-analysis`** — 内省ログ横断でパターン抽出・問いの提示
+- **`@finance`** — 家計見える化・固定費棚卸し・投資進捗追跡（実支払い代行なし）
+- **`@planner`** — 旅行・イベント・大型購入の調査・比較・計画（実予約代行なし）
+
+### Tier 2（専門領域）
+- **`@english`** — IELTS Band 7目標のライティング添削・語彙ノート
+- **`@knowledge`** — URLや外部コンテンツをナレッジノートに変換・wikilink構築・週次メンテナンス
+
+### Tier 3（インフラ）
+- **`@infrastructure`** — タスクDB棚卸し（**7日以上停滞**を検出）・重複検出・静かな故障監視（提案のみ、Read専用）
+
+各エージェントの完全仕様は `.claude/agents/<agent-name>.md` を参照。
+
+## 🧠 Local AI（Ollama）— 夜間処理担当
+
+vault本体を補助する別レイヤー。`<LOCAL_AI_DIR>\` で管理。
+
+| スクリプト | 用途 | モデル | 起動 |
+|---|---|---|---|
+| `local_qa_loop.py` | 00:01-18:00 連続ループで vault 全体を巡回、誤字脱字・frontmatter不整合を検出（18:00-24:00 はゴールデンタイム停止） | qwen3.5:9B | Task Scheduler `Claude-LocalAIQA`（00:01） |
+| `ocr_intake.py` | OCR保管庫の新規画像を OCR し `_ocr_out/` に下書き .md を出力（夜間バッチ、手動起動） | qwen2.5vl:7b | 手動（将来的に Task Scheduler 追加予定） |
+| `ghost.py` | Downloads フォルダの自動分類（vault関係なし、別役） | qwen3.5:9B / deepseek-r1:14b | 手動 |
+
+**Local AI の境界線**：
+- ✅ QAレポートを `00_Intranet/local-ai-runs/qa/YYYY-MM-DD.md` に追記するだけ
+- ✅ OCR下書きを `05_Resources/Resources/OCR保管庫/_ocr_out/` に出力するだけ（最小拡張）
+- ❌ `_ocr_out/` 以外の vault本体ファイルの編集・削除は一切しない
+- ❌ パートナー関連の代筆（代筆禁止ゾーン §3.3 継承）
+- ❌ 外部API呼び出し（Ollama除く）
+
+**OCR 運用フロー**：
+1. 新規画像を `OCR保管庫/` に置く（対応ノートなし or `status: 未処理` のみ処理対象）
+2. `ocr_intake.py` が `qwen2.5vl:7b` でテキスト化 → `_ocr_out/<stem>.md` に下書き出力
+3. 朝 orchestrator §0.2 が `_ocr_out/` を拾い → `07_Inbox/インボックス/` へ正式投稿 → 通常振り分けへ
+4. 既存 180件（`status: archived`）は再処理しない（archived ＝ 完了印）
+
+朝の Claude Code orchestrator が QA レポートを読み、人間（オーナー）に提示する設計。
+
+## 📜 共通ルール（全エージェント＋Claude Code 本体）
+
+すべて `00_Intranet/AI運用ルール集（イントラ）/` 配下に詳細あり。
+
+1. **🪪 オーナーの Identity と哲学** — 必ず確認してから動く
+2. **代筆禁止ゾーン** — パートナー宛の文章は AI が一切作らない（`.claude/agents/relationship.md` §2 / タスク管理ルール §3.3）
+3. **お金・健康・外部送信** — 人間確認必須。AI判断で進めない
+4. **担当境界** — 自分の領分外なら他エージェントへハンドオフ（チャット内で済ませず、`02_Tasks/タスク管理/タスク/` にタスクを作成し担当・コメントを記入）
+5. **完了条件が書けないタスク** — `AI判断OK` を OFF にして人間へエスカレート
+6. **セルフQA** — 出力末尾に 事実チェック / トーン / アンチスロップ の3行を付ける（QAサイクル §10.4）
+7. **ログの日付必須** — ログ・ナレッジ・タスク等を新規作成する際、frontmatter に以下を必ず記入する：
+   - `date` — コンテンツが対象とする日付（Notionインポートや他所からの転記の場合は**元の日付**）
+   - `created` — ファイルを実際に作成した日付（AIが生成した場合は生成日）
+   - 両者が同日でも省略しない。`date` が特定日ではなく期間の場合は範囲（例: `2026-04-29 〜 2026-05-06`）を記入する
+8. **YAML出力ルール** — frontmatter を書くときは「独立メタデータ（`担当`/`AI判断OK`/`status` 等）は1項目1行に改行」「値に `:`・`false/true`・絵文字を含むなら値全体を `"` で囲む」を必ず守る。`memo:` に複数メタデータを詰め込まない。詳細 → `00_Intranet/AI運用ルール集（イントラ）/📋 エージェント共通テンプレート.md` §YAML（frontmatter）出力ルール
+9. **インボックス情報移行ルール** — インボックスファイルは `status: done` なら削除不要。ただし**ファイルが持つ情報は必ず正式な場所（ナレッジ・ログ・Project hub・タスク等）に移行してから done にする**。インボックス整理では「削除するか」ではなく「内容が正式ファイルに転記されているか」を先に確認する。詳細 → タスク管理ルール §3.8
+
+## 🧭 Type-Driven PARA 運用
+
+PARA フレームワークを **物理フォルダで厳密に切らず、type プロパティで表現** する。Obsidian の Base ＋ wikilink ＋ プロパティが強力なので、属性駆動の方がフォルダ駆動より柔軟。
+
+### PARA と物理フォルダの対応
+
+| 物理 | 役割 | type 値 / 識別 |
+|---|---|---|
+| `01_Projects/プロジェクト/` | **P**: 期限つき複数タスクの束（例: 海外旅行2026） | `type: project` |
+| `02_Tasks/タスク管理/タスク/` | 単発行動 | （タスク） |
+| `04_Areas/<area>.md` | **A**: 領域ハブ＋ビュー | （Area hub） |
+| `05_Resources/Resources/ナレッジ/` | **R**: 再利用可能ナレッジ | `type: 📕本/📰記事/📜原則・ルール/📺アニメ・ドラマ/📖漫画/🎮ゲーム/🎵音楽/📺映画` |
+| `09_Logs/ログ/` | 時系列記録 | （ログ） |
+| `08_Archive/` | **物理アーカイブは遺跡レベルのみ**（新規は使わない） | （古い物理保管） |
+
+### 横串プロパティ
+
+- `status:` — **英語・ハイフン区切りで統一**。DB別の値セット：
+  - タスクDB: `todo` / `in-progress` / `done` / `on-hold` / `cancelled`
+  - インボックス: `new` / `routing` / `done` / `pending` / `on-hold` / `rejected`
+  - ナレッジDB: `inbox` / `in-progress` / `done` / `archived`
+  - **`status: archived` は全DB共通の神聖不変値** — 立てれば各 base view から自動的に隠れる
+- `area:` — `"[[Area名]]"` で Area に紐付け（複数なら list 形式）
+- `parent:` — `"[[Project名]]"` で Project に紐付け
+- `date:` — コンテンツが対象とする日付
+- `created:` — ファイル作成日
+
+### アーカイブ運用
+
+新規にアーカイブしたいものは **元の場所に置いたまま** `status: archived` を立てる。物理移動しない。
+- リンク切れない、検索可能、元のコンテキストで保管される
+- 各 base view は `status != "archived"` で自動的に隠す
+- `08_Archive/アーカイブ.md` は「08_Archiveフォルダ配下」と「status==archived」を OR で集約
+- `08_Archive/` フォルダは遺跡レベル 146件の保管のみ、新規移動には使わない
+
+### Log と Resource の境界判断
+
+迷ったら **「日付の固有性で意味が決まるか？」** で判断。
+- Yes → Log（その日のスナップショット、再現性なし）
+- No → Resource（再利用可能なナレッジ、日付は付随情報）
+
+例: 「2025-08-26 全部話した」→ Log、「Atomic Habits」→ Resource、「ハンドボールまとめ」→ Resource、「1on1 meet 6月」→ Log。
+
+### Project の扱い
+
+複数タスク・ログ・ナレッジが束になって意味を持つ取り組みは Project として `01_Projects/プロジェクト/<name>.md` に作る。中身は目標・スコープ・関連リンク・base codeblock（`parent.contains("Project名")` で集約）。
+
+完了時は `status: done` → 一定期間後 `status: archived`。物理移動不要。
+
+## 📂 タスクDBの扱い方
+
+- 各タスクは `02_Tasks/タスク管理/タスク/<タイトル> <hash>.md` の1ファイル
+- 「ステータス・優先度・期限・担当エージェント・Area」は本文先頭の **frontmatter または見出し直下** に記載されていることが多い
+- 抽出ロジック例：
+  - Glob `02_Tasks/タスク管理/タスク/*.md`
+  - Grep でステータス・期限・優先度を抽出
+  - 「期限切れ→今日期限→今週期限→優先度高」順でソート
+- 書き込み：新規タスクは `02_Tasks/タスク管理/タスク/<新タイトル>.md` を Write で作成
+- 既存タスクの更新は Edit で該当行を書き換え
+
+## 📂 Area の扱い方
+
+Area は **単一ハブ .md のみ** で運用する。例外なし。
+
+- `04_Areas/<area>.md` 1ファイルが Area の全てを表す（散文＋base codeblock）
+- **Area配下にフォルダを作らない**。サブページが必要になった時点で必ず3DBのいずれかに振り分ける
+- 派生コンテンツの振り分け先：
+  - **完了がある行動** → `02_Tasks/タスク管理/タスク/`
+  - **日付付きの記録・出来事・対話・気づき・MTGメモ・分析レポート** → `09_Logs/ログ/`
+  - **学んだこと・本・アニメ・原則・ルール集** → `05_Resources/Resources/ナレッジ/`
+- 各エントリの `area` プロパティで Area hub の base 表に自動的に紐づく
+- Resources の `type` 一覧: 📕本 / 📰記事 / 📺アニメ・ドラマ / 📖漫画 / 🎮ゲーム / 🎵音楽 / 📺映画 / **📜原則・ルール**（行動指針・運用ルール・なりたい人間像など）/ **👤人物**（人物ノード・連絡先facts）
+- 👤人物ノートの命名: `<名前>.md`（例: `パートナー.md`, `母.md`）。1ファイル1人物。`area: 人間関係`（パートナーのみ `area: パートナーとの関係`）
+
+## 🌐 URLインボックスの使い方
+
+ウェブページをナレッジノートに取り込む手順：
+
+1. `07_Inbox/インボックス/<タイトル>.md` を新規作成
+2. frontmatterに以下を記入して保存：
+   ```yaml
+   ---
+   type: 🔗URL
+   url: https://...
+   area: 仕事        # 省略可（@knowledgeが推定）
+   status: new
+   date: YYYY-MM-DD
+   created: YYYY-MM-DD
+   ---
+   ```
+3. `ObsidianInboxMonitor`（3時間おき）が自動検出 → `@orchestrator` → `@knowledge` へ委譲
+4. `@knowledge` が `05_Resources/Resources/ナレッジ/` にノートを作成し、既存ノートとwikilink接続
+
+即時処理したい場合は `@knowledge <URL>` で直接起動可。
+
+`@knowledge` の週次メンテナンス（毎週日曜20:00）は既存ナレッジのwikilink整備と陳腐化検出も自動実行する。
+
+## 🗣 対話キュレーション（会話で vault を精緻化する）
+
+非同期の一発処理では届かない「曖昧さの確認・人物や関係の深い理解・ファイル間の関連付け」を、**前面チャットでの会話**で進める仕組み。スキル `/scan` で起動する。
+
+- **対象**: 概念ノード / 人物ノート / ナレッジノート / ログ / Area / タスク（タスクの status 変更はオーナー確認、Area 方針更新は reviewer 経由＝それぞれ会話で確認してから反映）
+- **2フェーズ**: ①会話（質問で曖昧さを埋める。**ファイルは編集しない**、保留変更を `07_Inbox/編集キュー/<トピック>-<日付>.md` に溜める）→ ②オーナーが「適用して」と言ったら `@knowledge` 反映モードが編集キューを一括反映
+- **起点**: オーナーがトピック指定（`/scan パートナー`）／ AIが薄い・曖昧なファイルを検出して提案（`/scan` 引数なし）
+- **代筆禁止の継承**: パートナー関連は事実・分析の精緻化のみ。メッセージ・手紙の代筆はしない
+- **wikilink 接続もセット**: 情報追記だけでなく、関連ファイル・概念・人物・Project・Area への wikilink も同時にキューへ入れる（双方向・構造リンク含む。第2層の選択的方針に従い張りすぎない）
+- 詳細手順 → `.claude/skills/scan/SKILL.md`、反映の仕様 → `.claude/agents/knowledge.md` §🔁 反映モード
+
+## 🔗 wikilink 運用方針（v2、2026-05-27 導入）
+
+vault は **「2層リンク戦略」** で運用：
+
+### 第1層：構造的接続（frontmatter wikilink）
+
+新規ファイル作成・編集時、以下のプロパティは必ず `[[]]` wikilink 形式で書く：
+
+| プロパティ | 役割 | 例 |
+|---|---|---|
+| `children:` | 親→子（タスクの分解先） | `children:\n  - "[[フィギュアスケートをやる]]"` |
+| `parent:` | 子→親（タスクの統合元） | `parent: "[[パートナーとやりたいこと]]"` |
+
+**area の値は必ず以下の10 Area からプレーンテキストで書く**（wikilink 不要）：
+パートナーとの関係 / 人間関係 / 自己理解 / 仕事 / 英語 / ハンドボール / 健康 / 娯楽 / お金 / 時間管理
+
+- Area に該当しない場合は `area:` を空にする（「その他」「全体」「ナレッジ」等は使わない）
+- 複数 Area 跨ぐ場合はリスト形式：
+  ```yaml
+  area:
+    - パートナーとの関係
+    - 時間管理
+  ```
+
+**`area:` / `category:` / `agent:` / `status:` などはプレーンのまま**（列挙型値、リンク不要）。
+
+### 第1.5層：概念ノード（Concept layer、2026-05-29 導入）
+
+`05_Resources/Resources/概念/` に繰り返し登場するテーマ・原則・洞察を小さなノートとして置く。
+これがグラフの**意味的ハブ**になる。フォルダを横断して多数のログ・タスクから参照される。
+
+概念ノードの書き方：
+- frontmatter: `type: 📜原則・ルール` / `area:` / `created:`
+- 本文: 1〜2行の定義
+- `## 登場した場面`: 実際に登場したログ・タスクへのリンク（3〜5件が目安）
+- `## 生まれたアクション`: この概念から生まれたタスクへのリンク（任意）
+- `## 関連概念`: 他の概念ノードへのリンク
+
+重要なログには `## 気づき` セクションを追加し、概念ノードへリンクする：
+```markdown
+## 気づき
+- [[将来を先読みする習慣]] — なぜこの概念に繋がるか（1行）
+- [[言ったことをやる・一貫性]] — 同上
+```
+
+**概念ノードを作るタイミング**：同じテーマが3件以上のファイルに登場したとき。
+AIは確認なく概念ノードを新規作成してよい（ログ更新時に自然発生的に追加する）。
+
+### 第2層：本文内 wikilink（手動・選択的）
+
+本文中の `[[...]]` は**明示的に関連がある時だけ**貼る。機械的に貼らない。
+例：タスク本文で `関連ログ: [[2025-08-26 全部話した]]` のように、その文脈で参照したい時のみ。
+
+### 第3層：MOC（Map of Content）
+
+テーマ別のキュレーションは `00_Intranet/MOC/<テーマ>.md` に作る。
+AI は勝手に MOC を作らない（手動キュレーション領域）。
+
+現在の MOC（4件）：
+- `00_Intranet/MOC/アニメ・ドラマ図書館.md` — ジャンル別アニメ・ドラマ100件
+- `00_Intranet/MOC/ゲーム図書館.md` — ジャンル別ゲーム75件
+- `00_Intranet/MOC/自己理解マップ.md` — 概念ノード14件＋行動原則
+- `00_Intranet/MOC/人物関係図.md` — 人物ノート17件（カテゴリ別）
+
+※「海外旅行 2026」MOC は `01_Projects/プロジェクト/海外旅行 2026.md` に昇格済み（2026-05-27）。
+
+### 内部リンクは相対パス
+
+- `.md` 内のリンクは ローカル相対パスで完結（Notion URL は撤去済）
+- 削除済みの旧 `[[Orchestrator|...]]` 系 wikilink はテキスト表記（`🎯 オーケストレーター`）に置換済み
+
+## 🛠 Claude Code としての動作原則
+
+- ユーザー（オーナー）からの指示が **特定エージェントの役割に当てはまる**なら `@<agent>` で呼び出す
+- 「メモを整理して」「タスク化して」「振り分けて」系は **`@orchestrator`** に渡す
+- 直接実行する場合も、各エージェントの定義（`.claude/agents/`）と憲法（`00_Intranet/`）を尊重する
+- ファイル操作は `\\?\` プレフィックス不要（パスが長い場合は注意）
+
+## ⚙️ スケジュール起動
+
+Windows Task Scheduler `\Claude\` フォルダで稼働中：
+
+| タスク名 | スケジュール | プロンプト・処理 |
+|---|---|---|
+| `Claude-MorningStandup` | 毎朝 7:00 | `@orchestrator 朝のスタンドアップを生成` |
+| `Claude-PlannerReminder` | 毎朝 6:30 | `@planner 期限7日前・3日前・当日のタスクをリマインド` |
+| `Claude-NightQA` | 毎日 2:00 | `@infrastructure エージェント稼働ログを確認してサマリーを更新` |
+| `Claude-FinanceMonthly` | 毎日 8:30（スクリプト側で1日のみ実行） | `@finance 月次家計レポートを生成` |
+| `Claude-WeeklyReview` | 毎週日曜 18:00 | `weekly_review.ps1`：**Chrome履歴の同期のみ**自動。Maps/Geminiは手動エクスポート前提、レビュー本文はオーナーが `/週次レビュー` スキルで対話的に作成（無人生成は廃止・2026-05-31） |
+| `ObsidianInboxMonitor` | 3時間おき（9:00起点） | `@orchestrator 07_Inbox/ の未処理ファイルを振り分け・プロパティ補完` |
+| `Claude-LocalAIQA` | 毎日 00:01 | Local AI: `local_qa_loop.py` を起動、18:00 まで継続ループで誤字脱字・frontmatter QA（18:00-24:00 は停止） |
+| `Claude-KnowledgeEnrich` | 毎週日曜 20:00 | `@knowledge メンテナンスモードで実行`（ナレッジwikilink整備・陳腐化検出） |
+
+**セッション制限リトライ**：全 `\Claude\` 配下タスクに「失敗時30分後に最大3回リトライ」を Task Scheduler ネイティブ機能で設定。設定は `vault-scripts/setup_retry_policy.ps1` を管理者権限で1回実行する。
+
+スケジューラが呼び出す PS1 と Python スクリプトは vault 外で管理：
+- Claude Code 用 PowerShell / Python: `<WORKSPACE>\vault-scripts\`
+- Local AI 用 Python: `<LOCAL_AI_DIR>\`
+- 週次データ出力（weekly_summary.md 等）: `<WORKSPACE>\`
+
+## 💬 メッセージ履歴の管理方針（LINE / FB / IG）
+
+### rawデータ格納場所（すべて vault 外）
+| プラットフォーム | raw 投入先（振り返りたい時に置く） | アーカイブ |
+|---|---|---|
+| Facebook | `<WORKSPACE>\facebook_messages\data\raw\*.json` | `…\data\archive\<YYYYMMDD>\` |
+| Instagram | `<WORKSPACE>\instagram_messages\data\raw\*.json` | `…\data\archive\<YYYYMMDD>\` |
+| LINE | エクスポート .txt（Google Drive。ローカル週次取込は未接続） | — |
+
+**rawデータは vault に入れない**。vault には分析・振り返りログのみ置く。
+
+### メッセージ振り返りフロー（手動運用・2026-05-31〜）
+
+別れ話・センシティブな話題などセンシティブな内容を無人で機械処理しないため、**自動スケジュールは設けず、オーナーが振り返りたい時だけ手動で起動する**（`Claude-WeeklyMessageReport` は廃止済み）。
+
+1. 振り返りたい媒体のエクスポートを上表の raw に置く（FBは `パートナー_0.json` 等）
+2. オーナーが `/message-review` を起動（または `vault-scripts\weekly_message_report.ps1` を手動実行）
+3. `convert_messages.py` が**パートナーとのスレッドのみ**直近7日を CSV 化（`weekly_latest_<媒体>.csv`）
+4. スキル `.claude/skills/message-review/SKILL.md` が**CSVを最後まで読み切った上で**、事実・パターンのみで振り返りレポートを `09_Logs/ログ/パートナー振り返り/` に作成（代筆・トーン採点はしない）
+5. 必要なら raw を `archive\<YYYYMMDD>\` へ手動退避
+
+> ⚠️ 対象はパートナーのみ。生成物は必ずオーナーが確認する（AIの誤読・捏造を防ぐ）。
+
+### vaultへの格納ルール（09_Logs/ログ/）
+
+| ログ種別 | ファイル名パターン | 例 |
+|---|---|---|
+| 週次チャット振り返り | `<YYYY-MM-DD>〜<YYYY-MM-DD> <名前>との<媒体>振り返り.md` | `2026-05-04〜2026-05-10 パートナーとのLINE振り返り.md` |
+| 期間・全体分析 | `<名前>との<媒体>メッセージ分析(<期間>).md` | `家族とのLINEメッセージ分析(YYYY-MM〜YYYY-MM).md` |
+| frontmatter必須項目 | `area` / `date`（期間の場合は開始日）/ `created` / `person: "[[<名前>]]"` | |
+
+### 人物ノート（👤人物）
+
+`05_Resources/Resources/ナレッジ/` に `type: 👤人物` で配置。ログのfrontmatterで `person: "[[名前]]"` としてwikilink接続。Obsidianのbacklinksパネルで自動集約。
+
+## 📅 現在の運用フェーズ
+
+**Phase 3（9体＋スキル運用・対話型へ転換）** — 2026-06-01 着手
+
+主な変更点：
+- **学習ハブ（06_LearningHub）廃止**：Ebbinghaus 自動復習の仕組みは実態に合わず撤去。76ノートは `08_Archive/06_LearningHub_legacy_20260601/` へ退避。`remind-memory` エージェント削除（**10体→9体**）。語彙ノートは `05_Resources/Resources/ナレッジ/英語語彙ノート.md` へ移設
+- **対話型スキルへの転換**：センシティブ・要確認の作業は無人エージェントでなく前面スキルで。`/weekly-review`・`/audit-tasks`・`/message-review`・`/scan`・`/recall` を整備。「エージェント＝無人定型／スキル＝対話・要確認」の棲み分け
+- **過去の振り返りは `/recall` スキル**で対話的に（旧・自動復習の代替）
+
+**Phase 2（10体運用＋Local AI 統合＋wikilink v2）** — 2026-05-27 着手
+
+主な変更点：
+- マイルーティン Area 廃止（記録ファイル730件削除）
+- 「娯楽」 Area 新規追加（10 Area 体制）
+- `01_Agents/` ナビゲーションスタブ削除（wikilink は本文テキスト化）
+- Tier 2/3 から不使用 5体削除（relationship-weekly / work / handball / classification / mail-get）
+- Local AI（Ollama qwen3.5:9B）に夜間 QA Loop を委譲
+- infrastructure の停滞検知閾値：30日 → **7日**
+- session_limit 時の自動リトライ機構を Task Scheduler ネイティブで設定
+- **wikilink v2 導入**：area / children / parent を 615 ファイルで wikilink 化。表記揺れ統一（「パートナー」→「パートナーとの関係」、「ルーティン/ナレッジ/その他」削除）
+- 「海外旅行 2026」 MOC 新規作成（`00_Intranet/MOC/`）→ その後 `01_Projects/プロジェクト/` に Project として昇格（2026-05-27）
+- **Type-Driven PARA 導入**：`01_Projects/` 新設、`status: archived` プロパティ運用、各 base view に `status != "archived"` フィルタ追加

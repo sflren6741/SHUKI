@@ -1,0 +1,24 @@
+# Obsidian workspace/cache (keep your own local UI state out of the repo)
+.obsidian/
+
+# Claude Code local state (only agents/ and skills/ are published)
+.claude/*
+!.claude/agents/
+!.claude/skills/
+
+# Runtime / generated output (personal — never commit)
+00_Intranet/agent-runs/
+00_Intranet/monitoring/
+00_Intranet/local-ai-runs/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Images & binaries (this is a docs/framework repo)
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.pdf
