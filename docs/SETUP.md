@@ -11,6 +11,7 @@
 | 必要 | 用途 |
 |---|---|
 | [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) | エージェントの実行環境（CLI / VS Code拡張） |
+| Anthropic アカウント（有料） | Claude Pro（$20/月〜）または API クレジット — 無料枠なし |
 | [Obsidian](https://obsidian.md/) | vault の編集・閲覧・グラフ表示 |
 | git | このリポの取得・バージョン管理 |
 | （任意）クラウドストレージ | 端末間同期（Google Drive 等） |
