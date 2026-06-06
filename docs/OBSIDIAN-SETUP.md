@@ -1,4 +1,4 @@
-# Obsidian Setup / Obsidian 設定ガイド
+﻿# Obsidian Setup / Obsidian 設定ガイド
 
 > **TL;DR (EN)** — Plugins and core settings that make this vault work: **Templater** (auto-inserts `created`/`date` and applies folder templates), **Obsidian Linter** (auto-updates `updated` on save), relative-path links, and an inbox-by-default new-note location. Set these once per device (`.obsidian/` is gitignored, so each device configures its own).
 
@@ -23,10 +23,10 @@
 
 | Folder | Template |
 |---|---|
-| `02_Tasks/タスク管理/タスク` | `_Templates/タスク.md` |
-| `09_Logs/ログ` | `_Templates/ログ.md` |
-| `05_Resources/Resources/ナレッジ` | `_Templates/ナレッジ.md` |
-| `07_Inbox/インボックス` | `_Templates/インボックス.md` |
+| `04_Tasks/タスク管理/タスク` | `_Templates/タスク.md` |
+| `07_Logs/ログ` | `_Templates/ログ.md` |
+| `06_Resources/Resources/ナレッジ` | `_Templates/ナレッジ.md` |
+| `01_Inbox/インボックス` | `_Templates/インボックス.md` |
 
 設定後、上記フォルダで新規ノートを作ると `created` / `date` が自動で入る。
 
@@ -52,7 +52,7 @@
 
 | 設定項目 | 推奨値 | 理由 |
 |---|---|---|
-| Default location for new notes | `07_Inbox/インボックス` | 行き先不明のノートをインボックスへ |
+| Default location for new notes | `01_Inbox/インボックス` | 行き先不明のノートをインボックスへ |
 | New link format | **Relative path to file** | Vault を移動・同期しても壊れない |
 | Automatically update internal links | ON | リネーム時にリンク自動更新 |
 | Default location for attachments | subfolder `assets` | 画像が散らからない |

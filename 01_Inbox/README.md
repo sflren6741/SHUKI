@@ -1,4 +1,4 @@
-# 07_Inbox — Unprocessed capture / 未処理キャプチャ
+﻿# 01_Inbox — Unprocessed capture / 未処理キャプチャ
 
 **EN** — Drop anything here: notes, URLs (`type: 🔗URL`), quick thoughts. The `orchestrator` sweeps the inbox on a schedule, fills in frontmatter, and routes each item to its proper home (Task / Log / Knowledge / Project). An inbox item is marked `status: done` only **after** its information has been migrated to a permanent file — the question is never "delete it?" but "has the content been moved?".
 

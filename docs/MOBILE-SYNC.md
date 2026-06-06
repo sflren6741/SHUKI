@@ -1,4 +1,4 @@
-# Mobile sync — Android + Obsidian + FolderSync / スマホ同期
+﻿# Mobile sync — Android + Obsidian + FolderSync / スマホ同期
 
 > **TL;DR (EN)** — Your vault lives in a cloud folder (e.g. Google Drive) on desktop. On Android, **FolderSync** mirrors that cloud folder to a *local* folder, and the Obsidian Android app opens the local folder as a vault. Use two-way sync, sync before and after you edit, and you can capture/read anywhere. This is one known-good recipe — swap the cloud backend or sync tool to taste.
 
@@ -58,9 +58,9 @@ PC側は vault をクラウドフォルダ（例: Google Drive）に置く。And
 
 ## 外出先キャプチャ / Capture on the go
 
-- 思いついたら `07_Inbox/インボックス/` に新規ノートを放り込むだけ。PCに戻って `@orchestrator` が振り分ける。
+- 思いついたら `01_Inbox/インボックス/` に新規ノートを放り込むだけ。PCに戻って `@orchestrator` が振り分ける。
 - Android のホームに Obsidian の「新規ノート」ウィジェット／ショートカットを置くと一瞬で書ける。
-- 共有メニューから URL を `07_Inbox` に送る運用も便利（`type: 🔗URL` を付けると knowledge エージェントがナレッジ化）。
+- 共有メニューから URL を `01_Inbox` に送る運用も便利（`type: 🔗URL` を付けると knowledge エージェントがナレッジ化）。
 
 ---
 

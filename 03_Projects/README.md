@@ -1,4 +1,4 @@
-# 01_Projects — Projects / プロジェクト
+﻿# 03_Projects — Projects / プロジェクト
 
 **EN** — Time-bound bundles of tasks, logs, and knowledge that only mean something together (`type: project`). Each project hub lives at `プロジェクト/<name>.md` and pulls in its children via an Obsidian Bases codeblock (`parent.contains("<project>")`). When done: `status: done` → later `status: archived` (no physical move).
 

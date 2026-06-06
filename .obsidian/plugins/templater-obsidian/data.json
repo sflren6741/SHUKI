@@ -1,0 +1,28 @@
+{
+  "command_timeout": 5,
+  "enable_folder_templates": true,
+  "folder_templates": [
+    {
+      "folder": "04_Tasks/タスク管理/タスク",
+      "template": "_Templates/タスク.md"
+    },
+    {
+      "folder": "07_Logs/ログ",
+      "template": "_Templates/ログ.md"
+    },
+    {
+      "folder": "06_Resources/Resources/ナレッジ",
+      "template": "_Templates/ナレッジ.md"
+    },
+    {
+      "folder": "01_Inbox/インボックス",
+      "template": "_Templates/インボックス.md"
+    }
+  ],
+  "syntax_highlighting": true,
+  "auto_jump_to_cursor": false,
+  "trigger_on_file_creation": true,
+  "templates_folder": "_Templates",
+  "enabled_templates_hotkeys": [],
+  "startup_templates": []
+}

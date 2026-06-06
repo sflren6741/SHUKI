@@ -1,11 +1,11 @@
----
+﻿---
 name: weekly-review
 description: オーナーの1週間を、デジタル活動データ（Chrome検索・Google Maps・Gemini）とvaultのログ・タスクから振り返り、対話しながら週次レビューを作成する。センシティブなログ（関係・健康）を含む場合は機械的に断定せずオーナーと確認しながら書く。「週次レビュー」「今週の振り返り」で起動。
 ---
 
 # 📅 週次レビュー（対話型）
 
-オーナーの1週間を振り返り、`09_Logs/ログ/週次レビュー/<YYYY-MM-DD>.md` にレポートを作る。
+オーナーの1週間を振り返り、`07_Logs/ログ/週次レビュー/<YYYY-MM-DD>.md` にレポートを作る。
 **前面セッションで対話しながら**作るのが従来の無人生成との違い。直近ログに関係・健康などセンシティブな内容が含まれることがあるため、断定せずオーナーに確認しながら進める。
 
 ## 🧭 必読コンテキスト
@@ -43,9 +43,9 @@ python <WORKSPACE>\vault-scripts\analyze_claude_usage.py   # Claude使用状況
 | ソース | パス |
 |---|---|
 | デジタル活動サマリー | `<WORKSPACE>\weekly_summary.md`（Chromeは自動反映。Maps/GeminiはStep1の手動分が入った時のみ） |
-| Claude使用状況 | `09_Logs/AI対話履歴/<期間終了日>.md` |
-| タスクDB | `02_Tasks/タスク管理/タスク/*.md`（今週完了・作業中・保留） |
-| ログ | `09_Logs/ログ/` 直近7日 |
+| Claude使用状況 | `07_Logs/AI対話履歴/<期間終了日>.md` |
+| タスクDB | `04_Tasks/タスク管理/タスク/*.md`（今週完了・作業中・保留） |
+| ログ | `07_Logs/ログ/` 直近7日 |
 
 > `weekly_summary.md` が無い／古い場合は該当セクションを「データなし」でスキップ。ChromeはあるがMaps/Geminiが無い、という部分欠損も明記する。
 
@@ -56,7 +56,7 @@ python <WORKSPACE>\vault-scripts\analyze_claude_usage.py   # Claude使用状況
 - タスク棚卸が必要そうなら `/タスク棚卸` を案内（このスキルでは深追いしない）
 
 ### Step 4: レポート作成
-`09_Logs/ログ/週次レビュー/<YYYY-MM-DD>.md` に Write。構成は orchestrator §週次レビューの §2〜§9 に準拠（数字サマリ／今週最重要3つ／各Area／お金／来週判断ポイント／デジタル活動の散文分析／Claude使用状況）。frontmatter に `date`（期間開始日）/ `created` を付ける。
+`07_Logs/ログ/週次レビュー/<YYYY-MM-DD>.md` に Write。構成は orchestrator §週次レビューの §2〜§9 に準拠（数字サマリ／今週最重要3つ／各Area／お金／来週判断ポイント／デジタル活動の散文分析／Claude使用状況）。frontmatter に `date`（期間開始日）/ `created` を付ける。
 
 ## 🚫 やってはいけないこと
 - ❌ センシティブなログ（特にパートナー関連）をオーナーの確認なく断定的に解釈・要約する

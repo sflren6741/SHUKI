@@ -3,6 +3,12 @@
 .obsidian/*
 # ...but publish the plugin list so Obsidian auto-prompts to install them
 !.obsidian/community-plugins.json
+# Publish Templater settings (folder→template mappings) so they work out of the box
+!.obsidian/plugins/
+.obsidian/plugins/*
+!.obsidian/plugins/templater-obsidian/
+.obsidian/plugins/templater-obsidian/*
+!.obsidian/plugins/templater-obsidian/data.json
 
 # Claude Code local state (only agents/ and skills/ are published)
 .claude/*

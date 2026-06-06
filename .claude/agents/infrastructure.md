@@ -1,4 +1,4 @@
----
+﻿---
 name: infrastructure
 description: タスクDB棚卸し・重複検出・古いエージェントやルールの整理提案。「DB点検」「タスク整理」「重複チェック」「インフラ点検」「静かな故障チェック」等で起動。削除・変更は提案のみ、実行は人間。
 tools: Read, Glob, Grep, Write
@@ -52,7 +52,7 @@ tools: Read, Glob, Grep, Write
 
 ### 1. タスクDB棚卸し
 
-`02_Tasks/タスク管理/タスク/*.md` を Glob で全件取得し、以下を検出：
+`04_Tasks/タスク管理/タスク/*.md` を Glob で全件取得し、以下を検出：
 
 - **7日以上停滞**：status = `in-progress` または `todo` で、更新日が7日以上前
 - **期限切れ**：`due` が今日より過去で、status が `done` / `cancelled` でない
@@ -60,7 +60,7 @@ tools: Read, Glob, Grep, Write
 
 ### 2. エージェント棚卸し
 
-`.claude/agents/*.md` を Glob で全件取得し、`09_Logs/ログ/` を Grep して起動記録を確認。1ヶ月以上起動記録がないエージェントをリストアップ。
+`.claude/agents/*.md` を Glob で全件取得し、`07_Logs/ログ/` を Grep して起動記録を確認。1ヶ月以上起動記録がないエージェントをリストアップ。
 
 ### 3. ルール整合性チェック
 

@@ -1,4 +1,4 @@
-# Automation — scheduled routines / 定期実行
+﻿# Automation — scheduled routines / 定期実行
 
 > **TL;DR (EN)** — Run Claude Code headlessly on a schedule (Windows Task Scheduler / cron) to generate a morning standup, a weekly review, nightly QA, and inbox routing. A small wrapper script invokes `claude -p "<prompt>"` from the vault folder. Optionally, a separate local LLM (Ollama) sweeps the vault at night for typos and broken frontmatter. None of this is required to use the system by hand.
 
@@ -25,7 +25,7 @@ claude -p "@orchestrator 朝のスタンドアップを生成"
 |---|---|---|
 | Morning standup | 毎朝 7:00 | `@orchestrator 朝のスタンドアップを生成` |
 | （任意）専門エージェント定期実行 | 任意 | `@<専門エージェント> <期限リマインド等、役割に合わせて>` |
-| Inbox sweep | 数時間おき | `@orchestrator 07_Inbox/ の未処理ファイルを振り分け・プロパティ補完` |
+| Inbox sweep | 数時間おき | `@orchestrator 01_Inbox/ の未処理ファイルを振り分け・プロパティ補完` |
 | Night QA | 毎日 2:00 | `@infrastructure 稼働ログを確認してサマリーを更新` |
 | Weekly review | 週次 | （対話スキル `/weekly-review` を人間が起動。無人生成しない） |
 

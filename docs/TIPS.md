@@ -1,4 +1,4 @@
-# Tips & mental models / 使いこなしと思考モデル
+﻿# Tips & mental models / 使いこなしと思考モデル
 
 > **TL;DR (EN)** — A few ideas do most of the work: organize by a `type:` property (not rigid folders); link files with wikilinks in two layers (structural in frontmatter, selective in body); promote recurring themes into "concept nodes" that become graph hubs; render dynamic views with Obsidian Bases; and keep hard boundaries (money/health/relationship messages need a human). Master these and the vault compounds in value.
 
@@ -38,7 +38,7 @@ PARA（Projects / Areas / Resources / Archive）を**硬いフォルダで切ら
 
 ## 3. 概念ノード / Concept nodes — グラフの意味的ハブ
 
-同じテーマが**3ファイル以上**に出てきたら、`05_Resources/Resources/概念/` に小さなノートを作る。
+同じテーマが**3ファイル以上**に出てきたら、`06_Resources/Resources/概念/` に小さなノートを作る。
 
 - 1〜2行で定義 ＋「登場した場面」「生まれたアクション」「関連概念」をリンク。
 - これがフォルダを横断する**意味的ハブ**になり、グラフ図で中心に育つ。

@@ -1,4 +1,4 @@
-# 05_Resources — Reusable knowledge & concept nodes / ナレッジ＋概念ノード
+﻿# 06_Resources — Reusable knowledge & concept nodes / ナレッジ＋概念ノード
 
 **EN**
 - `Resources/ナレッジ/` — reusable knowledge entries, one file per entry, classified by `type:` (📕book / 📰article / 📜principle / 📺anime / 📖manga / 🎮game / 🎵music / 📺movie / **👤person**). Yes — **people are knowledge notes too** (`type: 👤人物`): one file per person, holding the facts you want to remember about them. Logs link to them via `person: "[[<name>]]"`, so Obsidian's backlinks panel aggregates everything about that person automatically.

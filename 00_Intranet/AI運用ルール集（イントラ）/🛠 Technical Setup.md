@@ -1,4 +1,4 @@
-# 🛠 Technical Setup
+﻿# 🛠 Technical Setup
 
 > [!note] 🛠
 >
@@ -29,5 +29,5 @@ AI／自動化から触れる外部サービスをここに列挙する（触れ
 
 ## モバイル運用 / Mobile
 
-- キャプチャ手順：思いついたら `07_Inbox/インボックス/` に直投げ → PCで `@orchestrator` が振り分け。
+- キャプチャ手順：思いついたら `01_Inbox/インボックス/` に直投げ → PCで `@orchestrator` が振り分け。
 - 同期の具体手順は [docs/MOBILE-SYNC.md](../../docs/MOBILE-SYNC.md)。

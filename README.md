@@ -1,4 +1,4 @@
-# 🏯 Obsidian × Claude Code — Personal AI Intranet
+﻿# 🏯 Obsidian × Claude Code — Personal AI Intranet
 
 > A local-first "AI intranet" built on a single Obsidian vault and driven by [Claude Code](https://claude.com/claude-code).
 > Four core agents + an extensible specialist system, a type-driven PARA knowledge base, scheduled automation, and—most importantly—**guardrails that decide what the AI must *not* do.**
@@ -29,12 +29,12 @@ This repository is the **framework only**—the agents, rules, templates, and st
 ```
 Obsidian Vault (Markdown, local)
 ├── 00_Intranet/     ← the "constitution": rules every agent must read
-├── 01_Projects/     ← time-bound bundles of tasks (type: project)
-├── 02_Tasks/        ← one task per file (status / due / agent / area)
-├── 04_Areas/        ← ongoing areas of responsibility (single hub note each)
-├── 05_Resources/    ← reusable knowledge + concept nodes (the graph hubs)
-├── 07_Inbox/        ← unprocessed capture, auto-routed by the orchestrator
-├── 09_Logs/         ← dated records (standups, reviews, reflections)
+├── 03_Projects/     ← time-bound bundles of tasks (type: project)
+├── 04_Tasks/        ← one task per file (status / due / agent / area)
+├── 05_Areas/        ← ongoing areas of responsibility (single hub note each)
+├── 06_Resources/    ← reusable knowledge + concept nodes (the graph hubs)
+├── 01_Inbox/        ← unprocessed capture, auto-routed by the orchestrator
+├── 07_Logs/         ← dated records (standups, reviews, reflections)
 └── .claude/
     ├── agents/      ← agent definitions (4 core + add your own specialist agents)
     └── skills/      ← interactive, confirmation-required workflows
@@ -154,12 +154,12 @@ Questions, ideas, or want to compare setups? **Open a [GitHub Issue](../../issue
 ```
 Obsidian Vault（ローカルMarkdown）
 ├── 00_Intranet/     ← 「憲法」：全エージェントが必ず読むルール集
-├── 01_Projects/     ← 期限つきタスクの束（type: project）
-├── 02_Tasks/        ← 1ファイル1タスク（status / 期限 / 担当 / area）
-├── 04_Areas/        ← 継続責任領域（各1ハブノート）
-├── 05_Resources/    ← 再利用ナレッジ＋概念ノード（グラフのハブ）
-├── 07_Inbox/        ← 未処理キャプチャ、orchestrator が自動振り分け
-├── 09_Logs/         ← 日付つき記録（スタンドアップ・レビュー・内省）
+├── 03_Projects/     ← 期限つきタスクの束（type: project）
+├── 04_Tasks/        ← 1ファイル1タスク（status / 期限 / 担当 / area）
+├── 05_Areas/        ← 継続責任領域（各1ハブノート）
+├── 06_Resources/    ← 再利用ナレッジ＋概念ノード（グラフのハブ）
+├── 01_Inbox/        ← 未処理キャプチャ、orchestrator が自動振り分け
+├── 07_Logs/         ← 日付つき記録（スタンドアップ・レビュー・内省）
 └── .claude/
     ├── agents/      ← エージェント定義（コア4体＋専門エージェントは自分で追加）
     └── skills/      ← 対話・要確認のワークフロー

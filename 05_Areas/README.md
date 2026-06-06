@@ -1,4 +1,4 @@
-# 04_Areas — Areas of responsibility / 継続責任領域
+﻿# 05_Areas — Areas of responsibility / 継続責任領域
 
 **EN** — Ongoing areas of life, each represented by a **single hub note** `<area>.md` (no subfolders, no exceptions). The hub holds prose plus an Obsidian Bases codeblock that pulls in every note whose `area:` matches. Derived content is routed to Tasks / Logs / Resources instead of nesting under the area. Areas are referenced from other notes by the plain-text `area:` property.
 

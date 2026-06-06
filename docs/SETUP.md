@@ -1,4 +1,4 @@
-# Setup — reproduce this system / 再現手順
+﻿# Setup — reproduce this system / 再現手順
 
 > **TL;DR (EN)** — Install Claude Code → make an Obsidian vault → drop this repo into it → fill in `Identity.md` → set up the Obsidian plugins → run Claude Code from the vault folder. Optional: mobile sync, scheduled routines, a local nighttime QA model. Everything is plain Markdown, so it's all customizable.
 
@@ -92,7 +92,7 @@ type駆動PARA・wikilink2層戦略・概念ノード・境界の哲学。
 
 全部 Markdown とプロパティなので、好きに変えてよい：
 - **エージェントを足す/減らす** → `.claude/agents/<name>.md` を追加/削除（[AGENTS.md](AGENTS.md)）
-- **Area を自分の人生に合わせる** → `CLAUDE.md` の Area 一覧と `04_Areas/` を編集
+- **Area を自分の人生に合わせる** → `CLAUDE.md` の Area 一覧と `05_Areas/` を編集
 - **ルールを変える** → `00_Intranet/` 配下を編集（食い違ったら `.claude/agents/` と `CLAUDE.md` が正）
 - **言語** → ルール・テンプレは日本語ベース。英語化も自由
 

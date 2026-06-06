@@ -1,4 +1,4 @@
-# 09_Logs — Dated records / 日付つき記録
+﻿# 07_Logs — Dated records / 日付つき記録
 
 **EN** — Time-stamped records: standups, weekly reviews, reflections, meeting notes, analyses. The rule of thumb for "is this a Log or a Resource?": **does its meaning depend on the specific date?** Yes → Log (a snapshot, not reproducible). No → Resource (reusable knowledge, the date is incidental). Important logs add an `## 気づき` (insights) section that links to concept nodes, weaving the graph.
 

@@ -1,4 +1,4 @@
----
+﻿---
 name: knowledge
 description: URLや外部コンテンツをvaultのナレッジノートに変換し、既存ノートとのwikilink網を構築。週次メンテナンスでwikilink密度改善・陳腐化検出、対話整理スキルからの編集キュー一括反映も担当。「URLをナレッジ化」「ページを取り込んで」「ナレッジメンテ」「編集キュー適用」等で起動。既存本文の書き換えは編集キューでオーナーが確認済みの追記のみ、それ以外は新規作成と関連wikilink追加にとどめる。
 tools: Read, Write, Edit, Glob, Grep, WebFetch
@@ -56,7 +56,7 @@ tools: Read, Write, Edit, Glob, Grep, WebFetch
 
 ### ピックアップ条件
 
-`02_Tasks/タスク管理/タスク/*.md` の中で**すべて**を満たすもの：
+`04_Tasks/タスク管理/タスク/*.md` の中で**すべて**を満たすもの：
 
 - `agent: knowledge`
 - `ai_judgment_ok: true`
@@ -96,7 +96,7 @@ tools: Read, Write, Edit, Glob, Grep, WebFetch
 
 **Step 1: 重複チェック**
 
-`05_Resources/Resources/ナレッジ/` を Grep してURLまたはタイトルの一致を先に確認する。
+`06_Resources/Resources/ナレッジ/` を Grep してURLまたはタイトルの一致を先に確認する。
 
 - 同一URLのノートが既にある → `## 更新情報` セクションを末尾追加して終了（本文は書き換えない）
 - タイトルが類似する（別URL）→ 別ファイルとして作成し、既存ノートを `## 関連` でリンク
@@ -121,13 +121,13 @@ tools: Read, Write, Edit, Glob, Grep, WebFetch
 **Step 4: 既存ノートとの関連検索**
 
 以下の順でGrep検索を行い、関連ノートを3〜5件特定する：
-1. タイトルのキーワードで `05_Resources/Resources/ナレッジ/` をGrep
+1. タイトルのキーワードで `06_Resources/Resources/ナレッジ/` をGrep
 2. 同じ `area:` 値のノートをGrep
 3. MOCファイルで同カテゴリに属するノートを参照
 
 **Step 5: ナレッジノート作成**
 
-`05_Resources/Resources/ナレッジ/<タイトル>.md` を新規作成：
+`06_Resources/Resources/ナレッジ/<タイトル>.md` を新規作成：
 
 ```yaml
 ---
@@ -161,9 +161,9 @@ status: done
 
 **Step 6: Inboxアーカイブ**
 
-元の `07_Inbox/インボックス/<ファイル名>.md` を Edit：
+元の `01_Inbox/インボックス/<ファイル名>.md` を Edit：
 - `status: new` → `status: done` に変更
-- `振り分け先: 05_Resources/Resources/ナレッジ/<作成ファイル名>.md` を frontmatter または本文末尾に追記
+- `振り分け先: 06_Resources/Resources/ナレッジ/<作成ファイル名>.md` を frontmatter または本文末尾に追記
 
 **Step 7: 実行ログ**
 
@@ -179,7 +179,7 @@ status: done
 
 **Step 1: スキャン**
 
-`05_Resources/Resources/ナレッジ/*.md` を Glob で全件取得。各ファイルを Read して：
+`06_Resources/Resources/ナレッジ/*.md` を Glob で全件取得。各ファイルを Read して：
 - 本文中の `[[` 出現回数をカウント
 - `source:` URL の有無と `date:` の古さを確認
 
@@ -249,7 +249,7 @@ summary: "スキャンX件 / wikilink追補X件 / 陳腐化フラグX件"
 
 ### 入力
 
-`07_Inbox/編集キュー/<トピック>-<YYYY-MM-DD>.md`（`status: on-hold`）
+`01_Inbox/編集キュー/<トピック>-<YYYY-MM-DD>.md`（`status: on-hold`）
 
 ### フロー
 
@@ -271,9 +271,9 @@ summary: "スキャンX件 / wikilink追補X件 / 陳腐化フラグX件"
   - 概念ノード → `## 登場した場面` / `## 関連概念` / `## 生まれたアクション`
   - 人物ノート → 事実（出典つき）
   - ナレッジ → `## 要点` / `## 関連`
-  - ログ（`09_Logs/ログ/`）→ `## 気づき`（概念ノードへのwikilink）/ 事実の補完
-  - Area（`04_Areas/<area>.md`）→ 散文の現状・事実の追記
-  - タスク（`02_Tasks/タスク管理/タスク/`）→ `## メモ` / `## 履歴` / 完了条件の明確化
+  - ログ（`07_Logs/ログ/`）→ `## 気づき`（概念ノードへのwikilink）/ 事実の補完
+  - Area（`05_Areas/<area>.md`）→ 散文の現状・事実の追記
+  - タスク（`04_Tasks/タスク管理/タスク/`）→ `## メモ` / `## 履歴` / 完了条件の明確化
 
 **Step 4: キューに無い変更はしない**
 
