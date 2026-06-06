@@ -1,8 +1,7 @@
 ﻿# Claude work space — AI Intranet
 
-> 📖 **新しく見に来た方へ / New here?** まず [README](README.md) を読んでください（概要・思想・セットアップ）。
+> 📖 **新しく見に来た方へ** まず [README](README.md) を読んでください（概要・思想・セットアップ）。
 > このファイルは Claude Code が毎セッション読み込む**運用マニュアル本体**で、オーナー個人の vault に合わせて書かれています。`<...>` や `<WORKSPACE>` 等のプレースホルダーは自分の環境に置き換えて使ってください。
-> This file is the operating manual Claude Code loads every session; it is written for one person's vault. Adapt the placeholders to your own setup.
 
 ここはオーナーのAIエージェント運用イントラネット。Notionから移行したPARA構造のローカル vault。Obsidianでも編集できる構成。
 
@@ -43,7 +42,7 @@
 - **`@orchestrator`** — タスク振り分け・モーニングスタンドアップ・週次レビュー
 - **`@reviewer`** — 他エージェント出力・重要判断のダブルチェック（Read専用）
 - **`@knowledge`** — URLや外部コンテンツをナレッジノートに変換・wikilink構築・週次メンテナンス
-- **`@infrastructure`** — タスクDB棚卸し（**7日以上停滞**を検出）・重複検出・静かな故障監視（提案のみ、Read専用）
+- **`@infrastructure`** — タスクDB棚卸し（**7日以上停滞**を検出）・重複検出・静かな故障監視（提案のみ。夜間QAのみ monitoring への書き込みあり）
 
 ### 専門エージェント（任意追加）
 

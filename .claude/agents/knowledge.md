@@ -310,7 +310,7 @@ summary: "スキャンX件 / wikilink追補X件 / 陳腐化フラグX件"
 | `created:` | このファイルを実際に作成した日 |
 | `status:` | `done`（デフォルト） |
 
-Area: `04_Areas/` 配下のArea名（自分の環境に合わせて更新）
+Area: `05_Areas/` 配下のArea名（自分の環境に合わせて更新）
 
 ---
 

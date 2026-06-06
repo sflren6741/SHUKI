@@ -8,17 +8,18 @@
 | パス | 役割 |
 | --- | --- |
 | `00_Intranet/` | 憲法・運用ルール（本フォルダ） |
+| `01_Inbox/` | 未処理キャプチャ（`インボックス.md` がハブ＋inline Bases DB） |
+| `02_Home/` | ホーム・今日のフォーカス |
+| `03_Projects/` | プロジェクト（`プロジェクト.md` がハブ＋inline Bases DB） |
+| `04_Tasks/` | タスク管理（`タスク管理.md` がハブ＋inline Bases DB） |
+| `05_Areas/` | 継続責任領域（`Areas.md` がハブ、各 Area は単一 .md ハブのみ） |
+| `06_Resources/` | ナレッジ・概念ノード（`Resources.md` がハブ＋inline Bases DB） |
+| `07_Logs/` | 行動ログ・分析（`ログ.md` がハブ＋inline Bases DB） |
+| `08_Archive/` | アーカイブ（物理移動せず `status: archived` で管理） |
 | `00_Intranet/agent-runs/` | エージェント実行ログ（infrastructure が集計） |
 | `00_Intranet/monitoring/` | 稼働サマリー・セッション制限履歴 |
 | `00_Intranet/local-ai-runs/` | Local AI（Ollama）夜間処理の出力 |
-| `.claude/agents/` | Claude Code サブエージェント定義（**唯一の権威ソース**。コア4体＋専門エージェントは任意追加） |
-| `04_Tasks/` | タスク管理DB（自律ピック対象） |
-| `02_Home/` | ホーム・今日のタスク |
-| `05_Areas/` | 継続的責任領域（10 Area） |
-| `06_Resources/` | ナレッジ・OCR保管庫 |
-| `01_Inbox/` | 未処理（メール・メモ） |
-| `08_Archive/` | アーカイブ |
-| `07_Logs/` | 行動ログ・分析 |
+| `.claude/agents/` | Claude Code サブエージェント定義（**唯一の権威ソース**） |
 
 ## 🪪 まず最初に読む（全エージェント共通）
 
