@@ -96,12 +96,15 @@ Obsidian Vault（ローカルMarkdown）
 
 > 詳細は [docs/SETUP.md](docs/SETUP.md)。ここではエッセンスだけ。
 
-**手作業はこれだけ（〜10分）：**
+**手作業はこれだけ（〜15分）：**
 
-1. [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) をインストール（Anthropic アカウント・有料が必要）
-2. [Obsidian](https://obsidian.md/) をインストール
-3. このリポをクローン → Obsidian で vault として開く
-4. vault フォルダで `claude` を起動
+1. [Git](https://git-scm.com/downloads) をインストール（リポ取得用。ZIPダウンロードでも代用可）
+2. [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) をインストール（操作の主役。Anthropic アカウント・有料が必要）
+3. [Obsidian](https://obsidian.md/) をインストール（ノート閲覧・グラフ表示用のビューア）
+4. このリポをクローン（`git clone https://github.com/sflren6741/SHUKI my-vault`）→ Obsidian で「Open folder as vault」で開く
+5. vault フォルダで `claude` を起動（`cd my-vault && claude`）
+
+> 各ステップの詳しい入れ方・つまずき対処は [docs/SETUP.md](docs/SETUP.md) に1ページでまとめてあります。
 
 **あとはチャットで完結：**
 
