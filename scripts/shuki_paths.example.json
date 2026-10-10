@@ -1,0 +1,12 @@
+{
+  "vault": "C:\\path\\to\\your\\Obsidian_Vault",
+  "radio_dir": "C:\\path\\to\\your\\Radio",
+  "message_base": "C:\\path\\to\\your\\workspace",
+  "data_dir": null,
+  "code_cli": null,
+  "stt_venv_python": null,
+  "stt_script": null,
+  "claude_accounts": [],
+  "dora_names": [],
+  "lang": "ja"
+}

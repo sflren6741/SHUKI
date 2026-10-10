@@ -1,0 +1,94 @@
+{
+  "_comment": "SHUKI の個人データ層（L2）のテンプレート。<vault>/99_System/profile.json にコピーして自分の値を書く。このファイル自体は公開リポジトリに入る雛形なので、実在の個人情報を書かないこと。読み込みは vault-scripts/shuki_profile.py。",
+  "schema_version": 1,
+  "lang": "ja",
+  "user": {
+    "display_name": "あなた",
+    "full_name": "",
+    "romaji": "",
+    "employer": "",
+    "emails": []
+  },
+  "_areas_doc": "areas … 自分の人生の領域。name が vault の frontmatter `area:` に書く値そのもの。key は CSS変数名（--area-<key>）とJSONキーに使う英字スラッグ。icon は dashboard_icons.AREA_ICON_PATHS にあるID（heart/people/compass/briefcase/globe/handball/pulse/gamepad/coin/clock/box）。color はダーク、color_light は白地でコントラスト3.5以上になる暗色版。private:true でそのAreaのノートをAIに渡さない。display:false は「frontmatter の値としては有効だが画面のグルーピング・配色には出さない」。fallback:true は分類できないノートの受け皿（1つだけ）。 labels は表示言語ごとの見出し（例 {\"en\": \"Work\"}）。個人固有のArea名は共有の i18n 辞書に入れられない（辞書は公開される）ので、その訳語はここに書く。",
+  "areas": [
+    {
+      "name": "仕事",
+      "key": "work",
+      "icon": "briefcase",
+      "color": "#6C8AF2",
+      "color_light": "#617CD9",
+      "emoji": "💼"
+    },
+    {
+      "name": "健康",
+      "key": "health",
+      "icon": "pulse",
+      "color": "#46D6A5",
+      "color_light": "#2F9170",
+      "emoji": "💪"
+    },
+    {
+      "name": "学び",
+      "key": "learning",
+      "icon": "globe",
+      "color": "#4FA6E8",
+      "color_light": "#4088BE",
+      "emoji": "🌏"
+    },
+    {
+      "name": "お金",
+      "key": "money",
+      "icon": "coin",
+      "color": "#9BE05C",
+      "color_light": "#638F3A",
+      "emoji": "💰"
+    },
+    {
+      "name": "人間関係",
+      "key": "people",
+      "icon": "people",
+      "color": "#D96BE8",
+      "color_light": "#BA5CC7",
+      "emoji": "🤝"
+    },
+    {
+      "name": "自己理解",
+      "key": "self",
+      "icon": "compass",
+      "color": "#A87BF0",
+      "color_light": "#976ED7",
+      "emoji": "🧠"
+    },
+    {
+      "name": "娯楽",
+      "key": "fun",
+      "icon": "gamepad",
+      "color": "#63DD82",
+      "color_light": "#419155",
+      "emoji": "🎮"
+    },
+    {
+      "name": "時間管理",
+      "key": "time",
+      "icon": "clock",
+      "color": "#35BEDC",
+      "color_light": "#278CA2",
+      "emoji": "⏳"
+    },
+    {
+      "name": "その他",
+      "key": "other",
+      "icon": "box",
+      "color": "#9ca3af",
+      "color_light": "#6b7280",
+      "emoji": "📦",
+      "fallback": true
+    }
+  ],
+  "_people_doc": "people … 呼称のゆらぎを登録しておくと、メッセージ集計やAIに渡す前の除外判定で使われる。role は自由な文字列（partner/family/… ）。",
+  "people": [],
+  "_private_doc": "AIに読ませたくないノートの指定。4経路の多層防御：完全一致・ディレクトリ・Areaのprivateフラグ・パスに含まれる語。Claude Code の .claude/settings.json の permissions.deny とは別の仕組みなので、両方に同じ対象を書くこと。",
+  "private_paths": [],
+  "private_path_prefixes": [],
+  "private_name_tokens": []
+}

@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Edit(/01_Inbox/**)",
+      "Edit(/03_Projects/**)",
+      "Edit(/04_Tasks/**)",
+      "Edit(/05_Areas/**)",
+      "Edit(/06_Resources/**)",
+      "Edit(/07_Logs/**)",
+      "Edit(/99_System/**)"
+    ]
+  }
+}

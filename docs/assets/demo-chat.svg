@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="424" viewBox="0 0 900 424" role="img" aria-label="Claude Code のチャットでメモがタスク・ナレッジに自動整理されるデモ">
+  <defs>
+    <style>
+      .mono  { font: 15px ui-monospace,'Cascadia Code',Consolas,'Courier New',monospace; }
+      .user  { fill: #e8e8e6; }
+      .clr   { fill: #199e70; }
+      .ok    { fill: #0ca30c; }
+      .body  { fill: #c3c2b7; }
+      .path  { fill: #3987e5; }
+      .mut   { fill: #898781; }
+      .titlebar { font: 12px system-ui,-apple-system,'Segoe UI','Hiragino Sans','Noto Sans JP',sans-serif; fill: #898781; }
+
+      .cover { fill: #101014; transform-box: fill-box; transform-origin: 100% 50%; }
+      #cov1 { animation: type1 14s infinite; }
+      #cov2 { animation: type2 14s infinite; }
+      @keyframes type1 { 0%,3% { transform: scaleX(1); animation-timing-function: steps(24,end); } 16%,100% { transform: scaleX(0); } }
+      @keyframes type2 { 0%,46% { transform: scaleX(1); animation-timing-function: steps(14,end); } 57%,100% { transform: scaleX(0); } }
+
+      .f18 { opacity:0; animation: f18 14s infinite; } @keyframes f18 { 0%,18% {opacity:0;} 19%,100% {opacity:1;} }
+      .f23 { opacity:0; animation: f23 14s infinite; } @keyframes f23 { 0%,23% {opacity:0;} 24%,100% {opacity:1;} }
+      .f27 { opacity:0; animation: f27 14s infinite; } @keyframes f27 { 0%,27% {opacity:0;} 28%,100% {opacity:1;} }
+      .f31 { opacity:0; animation: f31 14s infinite; } @keyframes f31 { 0%,31% {opacity:0;} 32%,100% {opacity:1;} }
+      .f35 { opacity:0; animation: f35 14s infinite; } @keyframes f35 { 0%,35% {opacity:0;} 36%,100% {opacity:1;} }
+      .f44 { opacity:0; animation: f44 14s infinite; } @keyframes f44 { 0%,44% {opacity:0;} 45%,100% {opacity:1;} }
+      .f60 { opacity:0; animation: f60 14s infinite; } @keyframes f60 { 0%,60% {opacity:0;} 61%,100% {opacity:1;} }
+      .f64 { opacity:0; animation: f64 14s infinite; } @keyframes f64 { 0%,64% {opacity:0;} 65%,100% {opacity:1;} }
+      .f68 { opacity:0; animation: f68 14s infinite; } @keyframes f68 { 0%,68% {opacity:0;} 69%,100% {opacity:1;} }
+      .f75 { opacity:0; animation: f75 14s infinite; } @keyframes f75 { 0%,75% {opacity:0;} 76%,100% {opacity:1;} }
+
+      .caret { animation: blink 1.1s steps(2, jump-none) infinite; }
+      @keyframes blink { 0% {opacity:1;} 100% {opacity:0;} }
+
+      @media (prefers-reduced-motion: reduce) {
+        .cover { display: none; }
+        .f18,.f23,.f27,.f31,.f35,.f44,.f60,.f64,.f68,.f75 { opacity: 1; animation: none; }
+        .caret { animation: none; }
+      }
+    </style>
+  </defs>
+
+  <!-- terminal window -->
+  <rect x="0.5" y="0.5" width="899" height="423" rx="12" fill="#101014" stroke="rgba(255,255,255,0.10)"/>
+  <path d="M0.5 12 A11.5 11.5 0 0 1 12 0.5 H888 A11.5 11.5 0 0 1 899.5 12 V38 H0.5 Z" fill="#1c1c22"/>
+  <line x1="0.5" y1="38" x2="899.5" y2="38" stroke="rgba(255,255,255,0.07)"/>
+  <circle cx="24" cy="19.5" r="6" fill="#ff5f57"/>
+  <circle cx="44" cy="19.5" r="6" fill="#febc2e"/>
+  <circle cx="64" cy="19.5" r="6" fill="#28c840"/>
+  <text class="titlebar" x="450" y="24" text-anchor="middle">claude — my-vault</text>
+
+  <!-- 1st exchange -->
+  <g class="mono">
+    <text class="user" x="28" y="78"><tspan class="mut">&gt;</tspan> メモ追加：『Think Fast and Slow』を読みたい</text>
+    <rect id="cov1" class="cover" x="44" y="62" width="420" height="22"/>
+
+    <text class="f18 body" x="28" y="112"><tspan class="clr">⏺</tspan> インボックスに追加しました → <tspan class="path">01_Inbox/</tspan></text>
+    <text class="f23 body" x="28" y="139"><tspan class="clr">⏺</tspan> orchestrator が振り分け中…</text>
+    <text class="f27 body" x="46" y="166"><tspan class="ok">✔</tspan> <tspan class="path">06_Resources/ナレッジ/Think Fast and Slow.md</tspan> を作成</text>
+    <text class="f31 body" x="46" y="193"><tspan class="ok">✔</tspan> type: 📕本 ・ status: inbox ・ area: 娯楽</text>
+    <text class="f35 body" x="46" y="220"><tspan class="ok">✔</tspan> 関連ノート2件と wikilink 接続</text>
+  </g>
+
+  <!-- 2nd exchange -->
+  <g class="mono">
+    <g class="f44">
+      <text class="user" x="28" y="262"><tspan class="mut">&gt;</tspan> 今週の進行中タスクを見せて</text>
+      <rect id="cov2" class="cover" x="44" y="246" width="240" height="22"/>
+    </g>
+    <text class="f60 body" x="28" y="296"><tspan class="clr">⏺</tspan> in-progress のタスクは2件：</text>
+    <text class="f64 body" x="46" y="323"><tspan class="path">•</tspan> 出張精算を提出する <tspan class="mut">— 期限: 金曜 ・ area: 仕事</tspan></text>
+    <text class="f68 body" x="46" y="350"><tspan class="path">•</tspan> IELTS ライティング練習 <tspan class="mut">— 期限: 日曜 ・ area: 英語</tspan></text>
+  </g>
+
+  <!-- idle prompt -->
+  <g class="f75">
+    <text class="mono mut" x="28" y="392">&gt;</text>
+    <rect class="caret" x="46" y="378" width="9" height="18" fill="#e8e8e6"/>
+  </g>
+</svg>

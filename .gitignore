@@ -1,0 +1,134 @@
+# Obsidian workspace/cache (keep your own local UI state out of the repo)
+# Use .obsidian/* (not .obsidian/) so the negation below can punch through
+.obsidian/*
+# ...but publish the plugin list so Obsidian auto-prompts to install them
+!.obsidian/community-plugins.json
+# Publish Templater settings (folder→template mappings) so they work out of the box
+!.obsidian/plugins/
+.obsidian/plugins/*
+!.obsidian/plugins/templater-obsidian/
+.obsidian/plugins/templater-obsidian/*
+!.obsidian/plugins/templater-obsidian/data.json
+
+# Claude Code local state (only agents/ and skills/ are published)
+.claude/*
+!.claude/agents/
+!.claude/skills/
+!.claude/settings.json
+
+# 99_System = machine zone (AI/script working area — personal, never commit).
+# Only the README (which explains the zone) is published.
+99_System/*
+!99_System/README.md
+
+
+# Python build artifacts
+__pycache__/
+*.py[cod]
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Images & binaries (this is a docs/framework repo)
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.pdf
+# ...except the dashboard's own PWA icons, which it needs to run
+!scripts/dashboard_assets/*.png
+# ...and the README demo, recorded from sample data only
+!docs/assets/*.gif
+
+# Public core: AI chat, tasks, calendar, News and decision cards (2026-10-06).
+# Optional feature modules/assets/jobs are deliberately absent.
+# ── scripts/ は許可リスト方式（2026-09-28）────────────────────────────
+# ここは**作業ディレクトリそのもの**になった（公開する120ファイルと、公開しない約180本の
+# スクリプト・実データが同居する）。除外リスト方式だと書き忘れた1件がそのまま public に
+# 出るので、**まず全部無視してから公開するものだけ戻す**。
+# 資格情報は .gitignore に頼らず物理的に外（../shuki-secrets/）に出してある。
+# Webアプリの実データ（data/*.json）は追跡せず、*.example.json だけを公開する。
+# この一覧は publish_sync.py の plan_copy_ops() から生成した。
+scripts/**
+!scripts/**/
+
+!scripts/ai_lane.py
+!scripts/base_expr.py
+!scripts/base_yaml.py
+!scripts/calendar_utils.py
+!scripts/chat_export.py
+!scripts/claude_accounts.py
+!scripts/dashboard_auto_model.py
+!scripts/dashboard_base.py
+!scripts/dashboard_board.py
+!scripts/dashboard_calendar.py
+!scripts/dashboard_chat.py
+!scripts/dashboard_decisions.py
+!scripts/dashboard_facets.py
+!scripts/dashboard_file_links.py
+!scripts/dashboard_files.py
+!scripts/dashboard_icons.py
+!scripts/dashboard_mascot.py
+!scripts/dashboard_news.py
+!scripts/dashboard_server.ps1
+!scripts/dashboard_server.py
+!scripts/dashboard_session_tabs.py
+!scripts/dashboard_settings.py
+!scripts/dashboard_sfx.py
+!scripts/dashboard_theme.py
+!scripts/dashboard_ui.py
+!scripts/dashboard_voice_context.py
+!scripts/dashboard_voice.js
+!scripts/decisions.py
+!scripts/i18n_scan.py
+!scripts/model_registry.json
+!scripts/prompt_layers.py
+!scripts/test_prompt_layers.py
+!scripts/model_registry.py
+!scripts/model_executor.py
+!scripts/news_fetch.py
+!scripts/news_store.py
+!scripts/profile.example.json
+!scripts/shuki_db.py
+!scripts/shuki_i18n.py
+!scripts/shuki_notifications.py
+!scripts/mcp_health.py
+!scripts/test_mcp_health.py
+!scripts/shuki_webpush.py
+!scripts/test_shuki_webpush.py
+!scripts/shuki_paths.example.json
+!scripts/shuki_paths.py
+!scripts/shuki_profile.py
+!scripts/vault_index.py
+!scripts/vault_lint.py
+!scripts/vault_search.py
+!scripts/view_engine.py
+
+!scripts/shuki_core/**
+!scripts/dashboard_assets/**
+!scripts/i18n/**
+
+!scripts/README.md
+!scripts/register-scheduled-tasks.ps1
+!scripts/test_dashboard_sessions.py
+!scripts/test_dashboard_chat_concurrency.py
+!scripts/test_dashboard_chat_layout.py
+
+# 実データ・生成物は許可リストに入っていても公開しない（*.example.json は上で許可済み）
+scripts/*/data/*.json
+scripts/*/art/**
+scripts/**/__pycache__/**
+
+# Optional concept-game music is outside the initial core release.
+scripts/dashboard_assets/bgm/**
+
+# Tests stay in private development; core packaging has its own verified boot gate.
+scripts/test_*.py
+
+# Logo prototypes and their previews are design scratch, not part of the release (Ren, 2026-10-07).
+scripts/dashboard_assets/logo_prototypes/**
+
+# Credentials live outside the vault (beside the repository); if a copy ever lands here, never commit it.
+/shuki-secrets/

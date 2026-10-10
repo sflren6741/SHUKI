@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="540" viewBox="0 0 900 540" role="img" aria-label="SHUKI の構成図：スケジューラが Claude Code のエージェント群を定時起動し、Obsidian vault のローカル Markdown を読み書きする。Obsidian アプリは閲覧用。">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#16161a"/>
+      <stop offset="1" stop-color="#1a1a19"/>
+    </linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#898781"/>
+    </marker>
+    <style>
+      .sans { font-family: system-ui,-apple-system,'Segoe UI','Hiragino Sans','Noto Sans JP',sans-serif; }
+      .boxtitle { font-size: 13.5px; font-weight: 700; fill: #ffffff; }
+      .row  { font-size: 12px; fill: #c3c2b7; }
+      .lbl  { font-size: 11px; fill: #898781; }
+      .chipname { font-size: 12.5px; font-weight: 700; fill: #ffffff; }
+      .chiprole { font-size: 10px; fill: rgba(255,255,255,0.85); }
+      .panel { fill: rgba(255,255,255,0.03); stroke: rgba(255,255,255,0.12); }
+      .flow { stroke: #898781; stroke-width: 1.6; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect x="0.5" y="0.5" width="899" height="539" rx="14" fill="url(#bg)" stroke="rgba(255,255,255,0.10)"/>
+
+  <!-- you -->
+  <g class="sans">
+    <rect x="345" y="22" width="180" height="40" rx="20" class="panel"/>
+    <text class="boxtitle" x="435" y="47" text-anchor="middle">🧑 あなた（チャット）</text>
+    <line class="flow" x1="435" y1="62" x2="435" y2="104"/>
+    <text class="lbl" x="447" y="88">話しかけるだけ</text>
+  </g>
+
+  <!-- scheduler -->
+  <g class="sans">
+    <rect x="30" y="140" width="205" height="196" rx="10" class="panel"/>
+    <text class="boxtitle" x="48" y="168">⏰ スケジューラ</text>
+    <text class="row" x="48" y="196">7:00　朝スタンドアップ</text>
+    <text class="row" x="48" y="220">3hおき　インボックス振り分け</text>
+    <text class="row" x="48" y="244">12:30　タスクディスパッチ便</text>
+    <text class="row" x="48" y="268">日曜　週次メンテナンス</text>
+    <text class="row" x="48" y="292">深夜　vault_lint（決定的QA）</text>
+    <text class="lbl" x="48" y="318">＝ 無人でも勝手に回る</text>
+    <line class="flow" x1="235" y1="238" x2="268" y2="238"/>
+  </g>
+
+  <!-- Claude Code runtime -->
+  <g class="sans">
+    <rect x="270" y="108" width="330" height="330" rx="12" class="panel"/>
+    <text class="boxtitle" x="292" y="136">Claude Code — 実行環境</text>
+
+    <rect x="292" y="152" width="286" height="44" rx="8" fill="#2a78d6"/>
+    <text class="chipname" x="435" y="171" text-anchor="middle">🎯 orchestrator</text>
+    <text class="chiprole" x="435" y="187" text-anchor="middle">統括・振り分け・スタンドアップ</text>
+
+    <line class="flow" x1="435" y1="196" x2="435" y2="222"/>
+
+    <g>
+      <rect x="292" y="226" width="90" height="58" rx="8" fill="#c98500"/>
+      <text class="chipname" x="337" y="250" text-anchor="middle">researcher</text>
+      <text class="chiprole" x="337" y="268" text-anchor="middle">調査・比較</text>
+    </g>
+    <g>
+      <rect x="390" y="226" width="90" height="58" rx="8" fill="#199e70"/>
+      <text class="chipname" x="435" y="250" text-anchor="middle">knowledge</text>
+      <text class="chiprole" x="435" y="268" text-anchor="middle">ナレッジ化</text>
+    </g>
+    <g>
+      <rect x="488" y="226" width="90" height="58" rx="8" fill="#9085e9"/>
+      <text class="chipname" x="533" y="250" text-anchor="middle" font-size="11px">infrastructure</text>
+      <text class="chiprole" x="533" y="268" text-anchor="middle">点検・監視</text>
+    </g>
+
+    <text class="lbl" x="435" y="312" text-anchor="middle">＋ 専門エージェントを自由に追加（家計・語学・関係性…）</text>
+
+    <text class="lbl" x="435" y="346" text-anchor="middle">スキル（/setup ・ /weekly-review …）＝ 対話・要確認の作業</text>
+
+    <rect x="292" y="366" width="286" height="46" rx="8" fill="none" stroke="#e66767" stroke-dasharray="5 4" stroke-width="1.4"/>
+    <text x="435" y="386" text-anchor="middle" font-size="11.5px" fill="#e66767">🚫 ガードレール</text>
+    <text x="435" y="402" text-anchor="middle" font-size="10.5px" fill="#e66767">代筆しない ・ お金を動かさない ・ 健康判断しない</text>
+  </g>
+
+  <!-- vault -->
+  <g class="sans">
+    <rect x="642" y="100" width="228" height="272" rx="10" class="panel"/>
+    <text class="boxtitle" x="660" y="128">🗂 Obsidian Vault</text>
+    <text class="lbl" x="660" y="146">ぜんぶローカル Markdown</text>
+    <g class="row">
+      <circle cx="666" cy="170" r="4" fill="#e66767"/><text x="680" y="174">00_Intranet — 憲法・ルール</text>
+      <circle cx="666" cy="196" r="4" fill="#898781"/><text x="680" y="200">01_Inbox — 未処理キャプチャ</text>
+      <circle cx="666" cy="222" r="4" fill="#2a78d6"/><text x="680" y="226">03_Projects / 04_Tasks</text>
+      <circle cx="666" cy="248" r="4" fill="#c98500"/><text x="680" y="252">05_Areas — 継続責任領域</text>
+      <circle cx="666" cy="274" r="4" fill="#199e70"/><text x="680" y="278">06_Resources — ナレッジ</text>
+      <circle cx="666" cy="300" r="4" fill="#9085e9"/><text x="680" y="304">07_Logs — 日付つき記録</text>
+    </g>
+    <text class="lbl" x="660" y="340">type: と wikilink で PARA を表現</text>
+  </g>
+
+  <!-- claude <-> vault -->
+  <line class="flow" x1="600" y1="210" x2="638" y2="210"/>
+  <text class="lbl sans" x="619" y="200" text-anchor="middle">書く</text>
+  <line class="flow" x1="638" y1="256" x2="600" y2="256"/>
+  <text class="lbl sans" x="619" y="276" text-anchor="middle">読む</text>
+
+  <!-- obsidian viewer -->
+  <g class="sans">
+    <rect x="642" y="420" width="228" height="72" rx="10" class="panel"/>
+    <text class="boxtitle" x="660" y="448">👁 Obsidian アプリ</text>
+    <text class="row" x="660" y="472">グラフ・Bases ビューで俯瞰する</text>
+    <line class="flow" x1="756" y1="372" x2="756" y2="416"/>
+    <text class="lbl" x="768" y="398">閲覧</text>
+  </g>
+</svg>

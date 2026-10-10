@@ -1,0 +1,112 @@
+{
+  "version": 1,
+  "dashboard_order": [
+    "claude_fable",
+    "claude_opus",
+    "claude_sonnet",
+    "claude_haiku",
+    "codex_astra",
+    "codex_sol",
+    "codex_terra",
+    "codex_luna",
+    "muse"
+  ],
+  "models": {
+    "claude_fable": {
+      "engine": "claude",
+      "cli_model": "claude-fable-5",
+      "dashboard_model": "claude-fable-5",
+      "label": "Fable",
+      "usage_window": "seven_day_opus"
+    },
+    "claude_opus": {
+      "engine": "claude",
+      "cli_model": "opus",
+      "dashboard_model": "opus",
+      "label": "Opus",
+      "usage_window": "seven_day_opus"
+    },
+    "claude_sonnet": {
+      "engine": "claude",
+      "cli_model": "sonnet",
+      "dashboard_model": "sonnet",
+      "label": "Sonnet",
+      "usage_window": "seven_day_sonnet"
+    },
+    "claude_haiku": {
+      "engine": "claude",
+      "cli_model": "haiku",
+      "dashboard_model": "haiku",
+      "label": "Haiku",
+      "usage_window": "seven_day"
+    },
+    "codex_astra": {
+      "engine": "codex",
+      "cli_model": "gpt-6-astra",
+      "dashboard_model": "codex/gpt-6-astra",
+      "label": "Codex Astra",
+      "usage_window": null
+    },
+    "codex_sol": {
+      "engine": "codex",
+      "cli_model": "gpt-6.1-sol",
+      "dashboard_model": "codex/gpt-5.6-sol",
+      "label": "Codex Sol",
+      "usage_window": null
+    },
+    "codex_terra": {
+      "engine": "codex",
+      "cli_model": "gpt-5.6-terra",
+      "dashboard_model": "codex/gpt-5.6-terra",
+      "label": "Codex Terra",
+      "usage_window": null
+    },
+    "codex_luna": {
+      "engine": "codex",
+      "cli_model": "gpt-6-luna",
+      "dashboard_model": "codex/gpt-5.6-luna",
+      "label": "Codex Luna",
+      "usage_window": null
+    },
+    "muse": {
+      "engine": "local",
+      "cli_model": "muse-glimmer-q3-ctx32k:30b",
+      "dashboard_model": "local/muse-glimmer-q3-ctx32k:30b",
+      "label": "Muse（実験・低速）",
+      "usage_window": null
+    }
+  },
+  "roles": {
+    "dashboard_default": "claude_sonnet",
+    "scheduler_default": "codex_luna",
+    "codex_failover": "codex_luna",
+    "scheduler_fallback": "claude_sonnet",
+    "claude_default": "claude_sonnet",
+    "strategic": "claude_fable",
+    "simple_classify": "claude_haiku",
+    "briefing": "claude_sonnet",
+    "briefing_weekly": "claude_sonnet",
+    "task_dispatch": "claude_opus",
+    "task_dispatch_codex": "codex_luna",
+    "inbox_reflect": "claude_sonnet",
+    "inbox_route": "claude_haiku",
+    "inbox_decision": "claude_sonnet",
+    "ai_lane": "codex_luna",
+    "ai_lane_fallback": "claude_sonnet",
+    "knowledge_enrich": "claude_sonnet",
+    "night_qa": "codex_luna",
+    "night_qa_legacy": "claude_sonnet",
+    "night_qa_fallback": "claude_sonnet",
+    "purchase_recs": "claude_sonnet",
+    "finance_monthly": "claude_sonnet",
+    "paper_trade": "claude_sonnet",
+    "board_quests": "codex_luna",
+    "card_gen": "codex_luna",
+    "news_fetch": "codex_luna",
+    "viz_scout": "codex_luna",
+    "fusion_flags": "codex_luna",
+    "thumbnail_batch": "claude_sonnet",
+    "model_review": "claude_sonnet",
+    "takeout_report": "claude_sonnet"
+  }
+}
