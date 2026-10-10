@@ -7506,6 +7506,11 @@ REQ_LOG = collections.deque(maxlen=300)
 # 二重に掛けると plugin 側の理由コードとテストが崩れるので、ここだけは plugin に任せる。
 SELF_GUARDED_PREFIXES = ("/game/import/",)
 
+# 通知タップ（Service Worker の clients.openWindow）や外部リンクからの画面遷移は、Chrome が
+# Sec-Fetch-Site: cross-site を付けるので上の検査だと 403 になる（2026-10-10 実測）。
+# 副作用のない入口ページへの GET の画面遷移だけは通す（sw.js の safeDestination と同じ3つ）。
+CROSS_SITE_ENTRY_PATHS = ("/", "/notifications", "/settings")
+
 BLOCKED_PAGE = (b'<!DOCTYPE html><meta charset="utf-8"><title>SHUKI</title>'
                 b'<p>This request came from another site, so SHUKI refused it.</p>'
                 b'<p><a href="/">Open SHUKI directly</a></p>')
@@ -7520,9 +7525,13 @@ class Handler(BaseHTTPRequestHandler):
         site = self.headers.get("Sec-Fetch-Site")
         if urllib.parse.urlsplit(self.path).path.startswith(SELF_GUARDED_PREFIXES):
             return True
+        entry_nav = (self.command == "GET"
+                     and self.headers.get("Sec-Fetch-Mode") == "navigate"
+                     and self.headers.get("Sec-Fetch-Dest") == "document"
+                     and urllib.parse.urlsplit(self.path).path in CROSS_SITE_ENTRY_PATHS)
         if (shuki_webpush.guard(self.client_address[0], self.headers.get("Host", ""),
                                 self.headers.get("Origin"))
-                and site in (None, "same-origin", "none")):
+                and (site in (None, "same-origin", "none") or entry_nav)):
             return True
         REQ_LOG.append(f"{time.strftime('%m-%d %H:%M:%S')} BLOCKED {self.command} "
                        f"{urllib.parse.urlsplit(self.path).path[:120]} from={self.client_address[0]} site={site}")
