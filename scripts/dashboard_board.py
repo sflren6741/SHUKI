@@ -3,9 +3,8 @@
 """
 dashboard_board.py — 📋 タスクボード（dashboard_server.py の /board ページ）
 
-v3（2026-07-19）: タイムライン/グラフビュー（vis-timeline・vis-network 依存）を廃止。
-実運用で使われていた 🧱 ウォール（Area別カード＋ステータス変更）だけを残し、
-検索ボックス・スマホ用ボトムシート詳細パネルを追加した単一ビュー構成にした。
+2026-10-09: Wall / Quest Log / AI Lane share one board. Status and responsibility
+are filters; project progress, selection, sorting and task details use the same rows.
 データは /board/data から取得。ステータス変更 → POST /queue（task_status_change）→
 次便で orchestrator が .md に反映（サーバーは vault 本体を直接書かない）。
 """
@@ -13,6 +12,7 @@ import dashboard_ui  # noqa: E402  (nav_html/bottom_nav_html/PWA_HEAD/RESPONSIVE
 import dashboard_chat  # noqa: E402  (💬 全ページ共通の対話ドック)
 import dashboard_icons  # noqa: E402  (線アイコンSVG)
 import dashboard_facets  # noqa: E402  (🔎 絞り込み・グルーピング・ソートの共有エンジン。2026-08-18 切り出し)
+import html
 import json  # noqa: E402  (DATA_LABEL の差し込み)
 import shuki_profile  # noqa: E402  (Area名・並び順・英字キーの単一情報源。2026-09-27)
 import shuki_i18n  # noqa: E402  (現在の言語を見てラベルを選ぶ)
@@ -37,7 +37,7 @@ PAGE = """<!DOCTYPE html>
 <html lang="ja"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 """ + dashboard_ui.pwa_head() + dashboard_chat.assets_head() + """
-<title>📋 タスクボード</title>
+<title> タスクボード</title>
 <style>
   * { box-sizing:border-box; margin:0; }
   /* デザイントークンは /theme.css（PWA_HEAD 経由で <link> 済み）が単一の正。ここでは持たない
@@ -58,17 +58,60 @@ PAGE = """<!DOCTYPE html>
   /* header/.hbtn の基本形は dashboard_ui.RESPONSIVE_CSS が単一の正（2026-08-03 標準化）。
      ここでは board 固有のレイアウト要件（全画面固定・下境界線）だけを追加する。 */
   header { flex-shrink:0; }
-  .filter-bar { display:flex; align-items:center; gap:8px; padding:6px 16px;
-    border-bottom:1px solid var(--line); flex-shrink:0; flex-wrap:wrap; }
-  .filter-bar select, .filter-bar input[type=search] { background:var(--card); border:1px solid var(--line);
-    color:var(--fg); border-radius:2px; padding:4px 9px; font-size:.8rem; font-family:inherit; }
-  .filter-bar select:focus, .filter-bar input[type=search]:focus { outline:none; border-color:var(--accent); }
-  .filter-bar input[type=search] { width:150px; }
-  /* ツールバーの役割記号（2026-08-08）。フィルタ／ソート／グループが同じ見た目の
-     セレクトで横並びになっていて、どれが何なのか押すまで分からなかった。
-     アイコンは dashboard_icons.UI_PATHS が単一情報源（UIデザイン原則 §9）。 */
-  /* .tb-grp / .tb-ico / .tb-sep（役割記号）は dashboard_ui.RESPONSIVE_CSS が単一の正。
-     ここで再定義しない（2026-08-08 に全ページ共通へ引き上げ・UIデザイン原則 §2.4）。 */
+  .board-toolbar { flex-shrink:0; padding:10px 16px; border-bottom:1px solid var(--line); }
+  .board-toolbar [hidden] { display:none !important; }
+  .board-quickbar { display:flex; align-items:center; gap:8px; }
+  .board-search { position:relative; flex:1; min-width:0; }
+  .board-search > span { position:absolute; width:1px; height:1px; padding:0; overflow:hidden;
+    clip-path:inset(50%); white-space:nowrap; }
+  .board-search > svg { position:absolute; left:12px; top:50%; transform:translateY(-50%);
+    color:var(--muted); pointer-events:none; }
+  .board-overview { display:flex; align-items:center; gap:12px; margin-top:6px;
+    font-size:.73rem; line-height:1.5; color:var(--muted); }
+  #board-view-summary { flex:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+  #task-count { flex:none; font-variant-numeric:tabular-nums; }
+  #board-settings-toggle { display:inline-flex; align-items:center; justify-content:center; gap:6px; flex:none; }
+  #board-settings-toggle[aria-expanded=true] { border-color:var(--accent); color:var(--accent); }
+  .board-chevron { display:inline-flex; }
+  #board-settings-toggle[aria-expanded=true] .board-chevron { transform:rotate(180deg); }
+  #board-filter-count { min-width:20px; padding:1px 4px; border-radius:999px;
+    background:var(--accent); color:var(--bg); font-size:.68rem; line-height:1.5; }
+  .board-options { margin-top:10px; padding-top:10px; border-top:1px solid var(--line);
+    max-height:38svh; overflow-y:auto; scrollbar-gutter:stable; }
+  #board-hint { font-size:.78rem; color:var(--muted); line-height:1.5; }
+  .board-controls { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; }
+  .board-field { display:flex; flex-direction:column; gap:4px; min-width:0; font-size:.73rem; color:var(--muted); }
+  .board-toolbar select, .board-toolbar input[type=search] { min-width:0; width:100%; min-height:44px;
+    background:var(--card); border:1px solid var(--line); color:var(--fg); border-radius:8px;
+    padding:8px 10px; font-size:.8rem; font-family:inherit; }
+  .board-toolbar .board-search input { padding-left:36px; }
+  .board-toolbar :focus-visible, #wall-container :focus-visible, #lane-bar :focus-visible {
+    outline:2px solid var(--accent); outline-offset:2px; }
+  #board-hint { margin-top:8px; }
+  .board-tools { display:flex; align-items:center; flex-wrap:wrap; gap:6px 10px; }
+  .board-tools button { min-height:44px; }
+  .board-tools .f-add, .board-tools .fc-t, .board-tools .fc-x { min-height:44px; }
+  .board-advanced { min-width:0; flex:1 1 200px; }
+  .board-advanced[open] { flex-basis:100%; }
+  .board-advanced > summary { cursor:pointer; min-height:44px; display:flex; align-items:center; gap:8px;
+    font-size:.77rem; color:var(--muted); }
+  .board-advanced > summary::before { content:'+'; font-size:1rem; }
+  .board-advanced[open] > summary::before { content:'−'; }
+  .advanced-controls { display:flex; flex-wrap:wrap; gap:10px; padding:0 0 10px; }
+  .advanced-controls .board-field { min-width:140px; }
+  .advanced-filters { display:flex; flex-wrap:wrap; gap:6px; align-items:center; padding-bottom:8px; }
+  .board-toolbar .v-row { padding:0 0 10px; border:0; }
+  .board-toolbar .v-chip, .board-toolbar .v-add { min-height:44px; }
+  .board-secondary { font:inherit; font-size:.76rem; padding:8px 10px; border:1px solid var(--line);
+    border-radius:8px; color:var(--fg); background:var(--card); cursor:pointer; min-height:44px; }
+  .board-return { margin-top:8px; width:100%; }
+  @media (max-width:900px) { .board-controls { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+  @media (max-width:600px) { .board-toolbar { padding:10px 12px; } .board-controls { gap:8px; } }
+  @media (max-height:500px) and (min-width:600px) {
+    .board-toolbar { display:grid; grid-template-columns:minmax(0,1fr) minmax(160px,28%);
+      gap:0 16px; padding:8px 12px; }
+    .board-overview { margin-top:0; } .board-options { grid-column:1/-1; }
+  }
 """ + dashboard_facets.engine_css() + dashboard_facets.views_css() + """
   .layout { display:flex; flex:1; min-height:0; position:relative; }
   #wall-wrap { flex:1; display:flex; flex-direction:column; min-height:0; overflow:hidden; }
@@ -79,7 +122,7 @@ PAGE = """<!DOCTYPE html>
      出ていた（実測: 320px幅で scrollWidth 328 > clientWidth 305 ＝ 23px はみ出し）。
      min(300px,100%) なら「入るなら300px、入らないならコンテナ幅」に落ちる。 */
   #wall-container { flex:1; min-height:0; overflow-y:auto; overflow-x:hidden; padding:14px;
-    display:grid; grid-template-columns:repeat(auto-fill, minmax(min(300px, 100%), 1fr)); gap:12px;
+    display:grid; grid-template-columns:repeat(auto-fit, minmax(min(340px, 100%), 1fr)); gap:12px;
     align-content:start; }
   /* グループなし（全件フラット）だけは1カラム。300pxのカードに全件を縦積みすると
      1列目だけが極端に長くなり、右側が空白になるため（2026-08-08）。 */
@@ -105,36 +148,6 @@ PAGE = """<!DOCTYPE html>
   .ac-bar-fill { height:100%; border-radius:2px; background:var(--ac, var(--teal));
     transition:width .5s ease; }
   .ac-chips { display:flex; flex-direction:column; gap:5px; }
-  /* ===== 📋 クエストログ（表示方式・2026-08-25） =====
-     プロジェクト／概念ノードへの束ねを「進行中カードの1軸」から「専用の見せ方」へ格上げ。
-     箱＝Project、中身＝チェックボックス。done を消さず ✓ で溜めて見せ、
-     箱が100%埋まったら演出（burstAt/showToast 既存流用）を出してクリア済み棚へ畳む
-     （「ためてためて消す気持ちよさ」ユーザーのフィードバック 2026-08-25）。 */
-  /* .mode-toggle / .mode-btn は dashboard_ui.RESPONSIVE_CSS が正（2026-09-15 に引き上げ。
-     /visualize のセクション切替と同じ器を使うため）。ここでは再定義しない。 */
-  #wall-container.quest-log { display:flex; flex-direction:column; gap:12px; }
-  .ql-boxes { display:grid; grid-template-columns:repeat(auto-fill, minmax(min(320px, 100%), 1fr));
-    gap:12px; }
-  .ql-rows { display:flex; flex-direction:column; }
-  .ql-row { display:flex; align-items:center; gap:9px; padding:6px 2px;
-    border-bottom:1px solid var(--line); cursor:pointer; font-size:.8rem; }
-  .ql-row:last-child { border-bottom:none; }
-  .ql-row:hover { background:color-mix(in srgb, var(--ac, var(--line)) 12%, transparent); }
-  .ql-box { width:15px; height:15px; border-radius:3px; border:1.5px solid var(--muted);
-    flex-shrink:0; display:flex; align-items:center; justify-content:center; color:var(--bg); }
-  .ql-row.done .ql-box { background:var(--teal); border-color:var(--teal); }
-  .ql-row.done .ql-title { color:var(--muted); text-decoration:line-through; }
-  .ql-title { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  /* 箱内の起票月サブ見出し（2026-08-31）: 大きな箱（10件超）だけ中身を月で割る中間単位。
-     10件以下の箱・軸グルーピング（起票月別等）では出さない。 */
-  .ql-subhead { font-size:.7rem; font-weight:bold; color:var(--muted); letter-spacing:.04em;
-    padding:9px 2px 4px; border-bottom:1px solid var(--line); }
-  .ql-subhead:first-child { padding-top:2px; }
-  .ql-cleared-toggle { font-size:.76rem; color:var(--muted); padding:8px 4px; cursor:pointer;
-    border-top:1px solid var(--line); margin-top:2px; }
-  .ql-cleared-toggle:hover { color:var(--fg); }
-  .ql-cleared-list { display:none; flex-direction:column; gap:2px; padding:4px 4px 0; }
-  .ql-cleared-row { font-size:.76rem; color:var(--muted); padding:3px 2px; }
   .chip { display:flex; align-items:center; gap:7px; padding:7px 8px; border-radius:2px;
     background:var(--bg); border:1px solid var(--line); cursor:pointer; font-size:.78rem;
     transition:transform .12s, border-color .12s; min-height:36px; }
@@ -347,170 +360,142 @@ PAGE = """<!DOCTYPE html>
     #wall-container { padding:10px; gap:10px; }
   }
 
-  /* ── 🤖 AIレーン（2026-09-04）──────────────────────────────
-     「どれをAIに任せられるか」を3レーンで一望し、まとめて指示する画面。
-     レーンは ai_lane.py がリクエストのたび導出する（vault には保存しない）。
-     ユーザーが押して保存される値は human_only の1個だけ＝オプトアウト方式。 */
-  /* 3レーン固定。auto-fit にすると中間幅で2列になり、3枚目が2行目へ回った上に
-     行トラックの高さが1枚目より低く計算されて**列が重なる**（2026-09-04 実測）。
-     レーンは常に3つと決まっているので、3列か1列かの二択でよい。 */
-  /* align-content:start と grid-auto-rows:max-content が要る。#wall-container は
-     高さ制約つき（flex:1 + overflow-y:auto）なので、既定の stretch のままだと
-     行トラックがコンテナ高の等分（3行なら1/3）に潰され、中身がはみ出して
-     下の行と重なる（縦積み時に実測。列が3つとも同じ左端に並ぶので余計に分かりにくい）。 */
-  #wall-container.ai-lane { display:grid; gap:12px; align-items:start;
-    align-content:start; grid-auto-rows:max-content;
-    grid-template-columns:repeat(3, minmax(0, 1fr)); }
-  /* min-height:0 は flex 用のイディオムで、grid item に付けると行トラックが
-     min-content 0 と評価されて縮み、中身がはみ出して下の行と重なる原因になる。 */
-  .lane-col { border:1px solid var(--line); border-radius:10px; background:var(--card);
-    display:flex; flex-direction:column; overflow:hidden; }
-  .lane-hd { padding:10px 12px; border-bottom:1px solid var(--line); background:var(--bg); }
-  .lane-hd .lh-t { font-weight:bold; font-size:.9rem; display:flex; align-items:center; gap:6px; }
-  .lane-hd .lh-n { margin-left:auto; font-size:.75rem; color:var(--muted); }
-  .lane-hd .lh-d { font-size:.7rem; color:var(--muted); margin-top:3px; line-height:1.5; }
-  .lane-body { padding:8px; display:flex; flex-direction:column; gap:6px; }
-  .lane-item { display:flex; gap:8px; align-items:flex-start; padding:7px 8px; border-radius:7px;
-    border:1px solid var(--line); background:var(--bg); cursor:pointer; }
-  .lane-item:hover { border-color:var(--accent); }
-  .lane-item.sel { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 10%, var(--bg)); }
-  .lane-item input { margin-top:3px; flex:none; accent-color:var(--accent); }
-  .li-main { min-width:0; flex:1; }
-  /* タイトルと理由は別行にする（inline のままだと理由がタイトルの末尾に流れ込み、
-     どこまでがタスク名か読めなくなる・2026-09-04 実機で確認） */
-  .li-title { display:block; font-size:.82rem; line-height:1.45; word-break:break-word; }
-  .li-meta { display:block; font-size:.66rem; color:var(--muted); margin-top:3px; line-height:1.5; }
-  .li-runner { display:inline-block; padding:0 5px; border-radius:4px; border:1px solid var(--line);
-    margin-right:5px; }
-  .li-runner.dispatch { border-color:var(--accent); color:var(--accent); }
-  .li-start-wait { display:inline-block; padding:0 5px; border-radius:4px;
-    border:1px solid var(--line); color:var(--muted); margin-right:5px; }
-  .lane-empty { padding:14px 10px; text-align:center; color:var(--muted); font-size:.75rem; }
-  /* 選択中に出る操作バー。まとめて指示するのがこの画面の主目的なので、
-     1件ずつのボタンはカードに置かず、ここに集約する。 */
-  #lane-bar { position:fixed; left:50%; transform:translateX(-50%); bottom:calc(16px + env(safe-area-inset-bottom));
-    z-index:60; display:none; gap:8px; align-items:center; padding:9px 12px; border-radius:11px;
-    background:var(--card); border:1px solid var(--accent); box-shadow:0 6px 24px rgba(0,0,0,.28);
+  /* Shared task rows and selection actions in every grouping. */
+  .area-card { border-radius:12px; align-self:start; }
+  .ac-name { overflow-wrap:anywhere; min-width:0; }
+  .ac-count { white-space:nowrap; }
+  .ac-bar { height:6px; border-radius:4px; background:var(--line); }
+  .ac-bar-fill { background:var(--accent); border-radius:0 4px 4px 0; }
+  .chip { align-items:flex-start; gap:4px; border-radius:8px; padding:0; min-height:64px; }
+  .chip:hover { transform:none; border-color:var(--accent); }
+  .chip.sel { border-color:var(--accent); }
+  .task-select { display:flex; align-items:flex-start; justify-content:center; flex:none;
+    width:44px; min-height:44px; padding-top:14px; cursor:pointer; }
+  .task-select input { width:17px; height:17px; margin:0; accent-color:var(--accent); }
+  .task-select:has(input:disabled) { cursor:default; }
+  .task-open { flex:1; min-width:0; text-align:left; background:none; border:0;
+    color:var(--fg); padding:10px 10px 10px 0; font:inherit; cursor:pointer; min-height:64px; }
+  .task-open .chip-title { display:block; min-width:0; white-space:normal; overflow-wrap:anywhere;
+    line-height:1.45; font-size:.82rem; }
+  .task-meta { display:flex; flex-wrap:wrap; gap:4px 8px; align-items:center; font-size:.68rem;
+    color:var(--muted); margin-top:5px; line-height:1.5; }
+  .task-owner { display:inline-flex; align-items:center; gap:4px; }
+  .task-owner svg { flex:none; }
+  .chip.done { opacity:1; }
+  .chip.done .chip-title { color:var(--muted); }
+  .completed-tasks { margin-top:8px; }
+  .completed-tasks > summary { min-height:44px; display:flex; align-items:center; cursor:pointer;
+    font-size:.74rem; color:var(--muted); }
+  .group-more { width:100%; margin-top:8px; }
+  #lane-bar { position:fixed; left:50%; transform:translateX(-50%); bottom:16px; z-index:60;
+    display:none; gap:6px; align-items:center; padding:8px 10px; border-radius:12px; background:var(--card);
+    border:1px solid var(--line); box-shadow:0 6px 24px rgba(0,0,0,.18); width:max-content;
     max-width:calc(100vw - 24px); flex-wrap:wrap; }
   #lane-bar.on { display:flex; }
-  #lane-bar .lb-n { font-size:.8rem; font-weight:bold; }
-  #lane-bar button { font:inherit; font-size:.78rem; padding:5px 10px; border-radius:7px;
-    border:1px solid var(--line); background:var(--bg); color:var(--text-normal); cursor:pointer; }
-  #lane-bar button:hover { border-color:var(--accent); }
-  #lane-bar button.go { background:var(--accent); border-color:var(--accent); color:#fff; }
-  /* 狭い幅（スマホ・Tailscale経由の実機）では3列を諦めて縦積みにする。
-     ただし素直に積むと🧠30件でスクロールが長大になり下のレーンに辿り着けないので、
-     レーンごとに内部スクロールさせて3つの見出しを近くに保つ。 */
-  @media (max-width: 1000px) {
-    #wall-container.ai-lane { grid-template-columns:1fr; }
-    .lane-body { max-height:52vh; overflow-y:auto; }
-  }
+  #lane-bar .lb-n { font-size:.78rem; padding:0 4px; }
+  #lane-bar button { font:inherit; font-size:.76rem; min-height:44px; padding:8px 10px; border-radius:8px;
+    border:1px solid var(--line); background:var(--card); color:var(--fg); cursor:pointer; }
+  #lane-bar button:hover:enabled { border-color:var(--accent); }
+  #lane-bar button:disabled { opacity:.5; cursor:default; }
+  #lane-bar button.go { background:var(--accent); border-color:var(--accent); color:var(--bg); }
+  #lane-bar.on ~ .layout #wall-container { padding-bottom:100px; }
+  @media (max-width:760px) { #lane-bar { bottom:calc(70px + env(safe-area-inset-bottom)); }
+    #lane-bar.on ~ .layout #wall-container { padding-bottom:160px; } }
+  @media (prefers-reduced-motion:reduce) { .ac-bar-fill, .chip { transition:none; } }
+  @media (forced-colors:active) { .ac-bar-fill { background:Highlight; }
+    .chip.sel { border-color:Highlight; } }
 </style>
 </head>
 <body class="no-bn-pad">
 <div id="toast"></div>
-<div id="lane-bar">
-  <span class="lb-n"><span id="lb-count">0</span> 件を</span>
-  <button class="go" onclick="applyLaneAction('dispatch')" title="「🧠ユーザーのみ」指定を解除してAI側へ開放する（既にAI/prepレーンのタスクには効果なし）">🚚 AIに任せる</button>
-  <button onclick="applyLaneAction('human_only')" title="AIに触らせない。以後この画面の🧠に固定される">🧠 自分でやる</button>
-  <button class="task-done" onclick="applyBulkTaskStatus('done')" title="選択したタスクを完了として次便へ予約する">✓ 一括完了</button>
-  <button onclick="applyLaneAction('ai_ok')" title="「自分でやる」指定を解除してAI側へ戻す">↩ AIに戻す</button>
-  <button onclick="clearLaneSel()">✕</button>
+<div id="lane-bar" role="region" aria-label="選択したタスクの操作" aria-busy="false">
+  <span class="lb-n"><span id="lb-count">0</span> <span>件を選択</span></span>
+  <button class="go task-done" onclick="applyBulkTaskStatus('done')"><!--SHUKI_ICO:check--> 完了にする</button>
+  <button onclick="applyLaneAction('human_only')">自分でやる</button>
+  <button id="allow-ai" onclick="applyLaneAction('ai_ok')" title="手動の「自分でやる」指定を解除します。AIができる範囲は再判定されます。">AIを許可</button>
+  <button onclick="clearLaneSel()" aria-label="選択を解除">解除</button>
 </div>
 
 <!--SHUKI_PAGE_HEADER-->
 
-<div id="v-row" class="v-row wall-only"></div>
-<!-- ツールバー（2026-08-08 再設計）
-     ①絞り込みは「条件チップ＋＋ボタン」1本に統合（Areaセレクト・ステータスのチェック群・締切セレクトを廃止）
-     ②絞り込み／並べ替え／束ねの3ブロックは役割アイコンで区切る（どれがフィルタか一目で分からなかった） -->
-<div class="filter-bar">
-  <div class="tb-grp">
-    <div class="mode-toggle">
-      <button id="mode-wall" class="mode-btn active" onclick="setMode('wall')" title="Area等で束ねたカード一覧">🧱 ウォール</button>
-      <button id="mode-quest" class="mode-btn" onclick="setMode('quest')" title="プロジェクト単位のチェックリスト">📋 クエストログ</button>
-      <button id="mode-ai" class="mode-btn" onclick="setMode('ai')" title="AIに任せられる仕事とそうでない仕事の切り分け">🤖 AIレーン</button>
-    </div>
+<section class="board-toolbar" aria-label="タスクボードの操作">
+  <div class="board-quickbar">
+    <label class="board-search"><span>タスク検索</span>
+      """ + dashboard_icons.ui_icon_svg("search", 16) + """
+      <input type="search" id="f-search" placeholder="タスク検索…" oninput="applyFilters()">
+    </label>
+    <button type="button" class="board-secondary" id="board-settings-toggle" aria-label="表示・絞り込み"
+      aria-expanded="false" aria-controls="board-options" onclick="toggleBoardSettings()">
+      """ + dashboard_icons.ui_icon_svg("filter", 15) + """ <span>表示設定</span>
+      <span id="board-filter-count" hidden aria-hidden="true"></span>
+      <span class="board-chevron" aria-hidden="true">""" + dashboard_icons.ui_icon_svg("chevron-down", 12) + """</span>
+    </button>
   </div>
-
-  <span class="tb-sep"></span>
-  <div class="tb-grp">
-    <span class="tb-ico" title="タスク名で検索">""" + dashboard_icons.ui_icon_svg("search", 14) + """</span>
-    <input type="search" id="f-search" placeholder="タスク検索…" oninput="applyFilters()">
+  <div class="board-overview"><span id="board-view-summary"></span>
+    <span id="task-count" role="status" aria-live="polite"></span></div>
+  <div class="board-options" id="board-options" hidden>
+  <div class="board-controls">
+    <label class="board-field">表示するタスク
+      <select id="f-status" onchange="setBoardFilter('status', this.value)">
+        <option value="open">未完了</option><option value="in-progress">進行中</option>
+        <option value="on-hold">保留</option><option value="done">完了</option>
+        <option value="all">すべて</option><option value="custom" hidden>カスタム条件</option>
+      </select>
+    </label>
+    <label class="board-field">責任分担
+      <select id="f-lane" onchange="setBoardFilter('responsibility', this.value)">
+        <option value="all">全員</option><option value="ai">AIで完了まで</option>
+        <option value="prep">AIは準備まで</option><option value="human">自分でやる</option>
+        <option value="custom" hidden>カスタム条件</option>
+      </select>
+    </label>
+    <label class="board-field">グループ分け
+      <select id="f-group" onchange="applyFilters()">
+        <option value="area">Area別</option><option value="project">プロジェクト別</option>
+        <option value="responsibility">責任分担別</option><option value="none">一覧</option>
+        <optgroup label="その他のグループ分け">
+          <option value="concept">概念別</option><option value="due">締切別</option>
+          <option value="priority">優先度別</option><option value="status">ステータス別</option>
+          <option value="difficulty">難易度別</option><option value="progress">進捗度別</option>
+          <option value="created">起票月別</option><option value="created_day">起票日別</option>
+          <option value="completed_day">完了日別</option><option value="time_bucket">所要時間別</option>
+          <option value="efficiency">効率別</option>
+        </optgroup>
+      </select>
+    </label>
+    <label class="board-field">並べ替え
+      <select id="f-sort" onchange="onSortMetricChange()">
+        <option value="pri-due">優先度→締切</option><option value="due">締切</option>
+        <option value="created">起票日</option><option value="diff">難易度</option>
+        <option value="title">タイトル</option><option value="long">長期効果</option>
+        <option value="short">即効性</option><option value="time">所要時間</option>
+        <option value="efficiency">効率</option>
+      </select>
+    </label>
   </div>
-
-  <!-- クエストログでも使う（2026-09-03）。/files と同じチップUI。
-       ただし status 軸だけはクエストログでは無効（applyModeUI() が AXES.status を
-       一時的に外す＝done を残したまま見せる設計と衝突しないようにするため）。 -->
-  <span class="tb-sep"></span>
-  <div class="tb-grp">
-    <span class="tb-ico" title="絞り込み">""" + dashboard_icons.ui_icon_svg("filter", 14) + """</span>
-    <div id="f-chips" class="f-chips"></div>
-    <button id="f-add" class="f-add" title="絞り込む条件を追加">""" + dashboard_icons.ui_icon_svg("plus", 13) + """ 条件</button>
+  <p id="board-hint">タイトルで詳細、チェックでまとめて操作。</p>
+  <div class="board-tools">
+    <button class="board-secondary" id="select-visible" onclick="selectVisibleTasks()">表示中を選択</button>
+    <button class="board-secondary" onclick="resetBoardFilters()">条件をリセット</button>
+    <details class="board-advanced" id="board-advanced">
+      <summary id="advanced-summary">詳細設定・保存済みビュー</summary>
+      <div class="advanced-controls">
+        <label class="board-field">並べ替えの向き
+          <select id="f-sort-dir" onchange="applyFilters()"><option value="desc">▼降順</option><option value="asc">▲昇順</option></select>
+        </label>
+        <label class="board-field">表示密度
+          <select id="f-density" onchange="onDensityChange()"><option value="std">標準</option><option value="min">最小</option><option value="full">詳細</option></select>
+        </label>
+        <button id="f-disp" class="f-add" title="カードに出すプロパティを選ぶ（最大3つ）">プロパティ</button>
+      </div>
+      <div class="advanced-filters"><div id="f-chips" class="f-chips"></div>
+        <button id="f-add" class="f-add">＋ 条件</button></div>
+      <div id="v-row" class="v-row"></div>
+    </details>
   </div>
-
-  <span class="tb-sep"></span>
-  <div class="tb-grp">
-  <!-- クエストログでは「箱内の並べ替え」と「箱自体の並び順」の両方に効く
-       （2026-08-30）。ツールチップは applyModeUI() で出し分ける。 -->
-  <span class="tb-ico" title="並べ替え">""" + dashboard_icons.ui_icon_svg("sort", 14) + """</span>
-  <select id="f-sort" onchange="onSortMetricChange()" title="並べ替え">
-    <option value="pri-due">優先度→締切</option>
-    <option value="due">締切</option>
-    <option value="created">起票日</option>
-    <option value="diff">難易度</option>
-    <option value="title">タイトル</option>
-    <option value="long">長期効果</option>
-    <option value="short">即効性</option>
-    <option value="time">所要時間</option>
-    <option value="efficiency">効率</option>
-  </select>
+  <button type="button" class="board-secondary board-return" onclick="toggleBoardSettings(false)">タスクに戻る</button>
   </div>
-
-  <span class="tb-sep"></span>
-  <div class="tb-grp">
-  <!-- クエストログでは「並べ替え」ではなく「束ねた箱の並び順」の向きとして使う
-       （2026-08-26）。id="f-sort-dir" は共通のまま、タイトルだけ applyModeUI() で出し分ける。 -->
-  <select id="f-sort-dir" onchange="applyFilters(); savePrefs();" title="並べ替えの向き">
-    <option value="desc">▼降順</option>
-    <option value="asc">▲昇順</option>
-  </select>
-  </div>
-
-  <span class="tb-sep"></span>
-  <div class="tb-grp">
-  <span class="tb-ico" title="束ね方（グルーピング）">""" + dashboard_icons.ui_icon_svg("layers", 14) + """</span>
-  <select id="f-group" onchange="applyFilters()" title="束ね方（グルーピング）">
-    <option value="area">Area別</option>
-    <option value="project">プロジェクト別</option>
-    <option value="concept">概念別</option>
-    <option value="due">締切別</option>
-    <option value="priority">優先度別</option>
-    <option value="status">ステータス別</option>
-    <option value="difficulty">難易度別</option>
-    <option value="progress">進捗度別</option>
-    <option value="created">起票月別</option>
-    <option value="created_day">起票日別</option>
-    <option value="completed_day">完了日別</option>
-    <option value="time_bucket">所要時間別</option>
-    <option value="efficiency">効率別</option>
-    <option value="none">束ねない</option>
-  </select>
-  </div>
-
-  <span class="tb-sep wall-only"></span>
-  <div class="tb-grp wall-only">
-  <span class="tb-ico" title="表示">""" + dashboard_icons.ui_icon_svg("eye", 14) + """</span>
-  <select id="f-density" onchange="onDensityChange()" title="表示密度">
-    <option value="std">標準</option>
-    <option value="min">最小</option>
-    <option value="full">詳細</option>
-  </select>
-  <button id="f-disp" class="f-add" title="カードに出すプロパティを選ぶ（最大3つ）">""" + dashboard_icons.ui_icon_svg("plus", 13) + """ プロパティ</button>
-  </div>
-
-  <span id="task-count" style="font-size:.76rem;color:var(--muted);margin-left:4px;"></span>
-</div>
+</section>
 <div id="f-pop"></div>
 
 <div id="burst"></div>
@@ -531,7 +516,7 @@ PAGE = """<!DOCTYPE html>
   <div id="detail-panel">
     <div class="dp-hd">
       <span style="font-size:.75rem;color:var(--muted);">タスク詳細</span>
-      <button class="hbtn" onclick="closeDetail()" style="padding:4px 10px;">✕ 閉じる</button>
+      <button class="hbtn" onclick="closeDetail()" style="padding:4px 10px;"><!--SHUKI_ICO:cross--> 閉じる</button>
     </div>
     <div id="dp-title"  class="dp-title"></div>
     <div id="dp-badges" class="dp-badges"></div>
@@ -544,6 +529,7 @@ PAGE = """<!DOCTYPE html>
 <script>
 /* ===== グローバル状態 ===== */
 let ALL = [], MAP = {};
+const BOARD_LABEL = __BOARD_LABEL_JSON__;
 
 /* Area配色は /theme.css の --area-* が単一の正（dashboard_theme.AREA_C）。
    以前はここと progress/web/app.js に生hexを複製しており、テーマを変えても追従しなかった。
@@ -575,15 +561,15 @@ function areaIcon(area, color) {
     + '" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">' + p + '</svg>';
 }
 const ST_LABEL = {
-  'todo':'todo','in-progress':'▶ 進行中','on-hold':'⏸ 保留',
-  'done':'✓ 完了','cancelled':'✗ キャンセル',
+  todo:BOARD_LABEL.todo, 'in-progress':BOARD_LABEL.inProgress, 'on-hold':BOARD_LABEL.onHold,
+  done:BOARD_LABEL.done, cancelled:BOARD_LABEL.cancelled,
 };
 
 function esc(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;')
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
-function starStr(n) { return '★'.repeat(Math.max(0, Math.min(5, +n || 0))); }
+function starStr(n) { return (shukiIcon('star')).repeat(Math.max(0, Math.min(5, +n || 0))); }
 
 /* ===== 🔎 絞り込み（条件チップ・1軸に複数値） =====
    2026-08-08 再設計: Areaセレクト＋ステータスのチェックボックス群＋締切セレクトという
@@ -594,41 +580,59 @@ function starStr(n) { return '★'.repeat(Math.max(0, Math.min(5, +n || 0))); }
    共有エンジン（2026-08-18切り出し・/files ページと共有）。ここでは既定値だけを持つ。 */
 let FILTERS = { status: ['todo', 'in-progress', 'on-hold'] };  /* 既定＝手つかず＋動いているもの */
 
-/* 表示方式（2026-08-25）。🧱 ウォール＝従来のカード一覧、📋 クエストログ＝
-   プロジェクト／概念ノード単位のチェックリスト。端末ローカルで記憶（FOCUSと同じ流儀）。 */
-let VIEW_MODE = 'wall';
-function setMode(m) {
-  VIEW_MODE = m;
-  applyModeUI();
-  savePrefs();
+/* One board: status and responsibility are filters, grouping only changes the containers. */
+const OPEN_STATUSES = ['todo', 'in-progress', 'on-hold'];
+let LANE_SEL = new Set(), BULK_BUSY = false;
+function setBoardFilter(axis, value) {
+  if (value === 'custom') return;
+  FILTERS[axis] = value === 'all' ? [] : axis === 'status' && value === 'open' ? [...OPEN_STATUSES] : [value];
   applyFilters();
 }
-let SAVED_STATUS_AXIS = null;   /* クエストログの間だけ AXES.status を退避する（下記） */
-function applyModeUI() {
-  document.getElementById('mode-wall').classList.toggle('active', VIEW_MODE === 'wall');
-  document.getElementById('mode-quest').classList.toggle('active', VIEW_MODE === 'quest');
-  document.getElementById('mode-ai').classList.toggle('active', VIEW_MODE === 'ai');
-  document.querySelectorAll('.wall-only').forEach(el => { el.style.display = (VIEW_MODE === 'wall') ? '' : 'none'; });
-  /* レーンを離れたら選択は捨てる（別モードで見えない選択が残っていると、
-     戻ってきた時に「何を選んでいたか」が思い出せない状態で操作バーだけ出る） */
-  if (VIEW_MODE !== 'ai') clearLaneSel();
-  /* クエストログは done を消さず✓で溜めて見せる設計のため、status での絞り込みは
-     意味と衝突する（todoだけに絞ると箱の進捗表示が壊れる）。AXES から一時的に外すと
-     チップ・値ピッカー・filteredTasks() が自動的に status を無視するようになる
-     （FILTERS.status 自体は消さないので、ウォールへ戻せばそのまま復元される・2026-09-03）。 */
-  if (VIEW_MODE === 'quest') {
-    if (AXES.status) { SAVED_STATUS_AXIS = AXES.status; delete AXES.status; }
-  } else if (SAVED_STATUS_AXIS) {
-    AXES.status = SAVED_STATUS_AXIS; SAVED_STATUS_AXIS = null;
+function resetBoardFilters() {
+  FILTERS = {status:[...OPEN_STATUSES]};
+  document.getElementById('f-search').value = '';
+  clearLaneSel();
+  applyFilters();
+}
+function toggleBoardSettings(show = document.getElementById('board-options').hidden) {
+  document.getElementById('board-options').hidden = !show;
+  const toggle = document.getElementById('board-settings-toggle');
+  toggle.setAttribute('aria-expanded', String(show));
+  if (!show) {
+    closePop();
+    toggle.focus({preventScroll:true});
   }
-  /* f-sort-dir はウォールでは「タスクの並べ替えの向き」、クエストログでは
-     「束ねた箱の並び順の向き」に意味が変わる（2026-08-26）。ツールチップで区別する。 */
-  const dirSel = document.getElementById('f-sort-dir');
-  if (dirSel) dirSel.title = (VIEW_MODE === 'quest') ? '束ねた箱の並び順' : '並べ替えの向き';
-  /* f-sort はクエストログでは「箱の並び順」と「箱内タスクの並び順」を同時に決める
-     （2026-08-30）。ウォールと役割が違うのでツールチップだけ出し分ける。 */
-  const sortSel = document.getElementById('f-sort');
-  if (sortSel) sortSel.title = (VIEW_MODE === 'quest') ? '箱・箱内の並べ替え' : '並べ替え';
+}
+document.querySelector('.board-toolbar').addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !document.getElementById('board-options').hidden) {
+    if (document.getElementById('f-pop').classList.contains('on')) closePop();
+    else toggleBoardSettings(false);
+    e.preventDefault();
+    e.stopPropagation();
+  }
+});
+function syncBoardControls() {
+  const selected = FILTERS.status || [];
+  const same = values => selected.length === values.length && values.every(v => selected.includes(v));
+  document.getElementById('f-status').value = !selected.length ? 'all' : same(OPEN_STATUSES) ? 'open'
+    : selected.length === 1 && ['in-progress','on-hold','done'].includes(selected[0]) ? selected[0] : 'custom';
+  const lanes = FILTERS.responsibility || [];
+  document.getElementById('f-lane').value = !lanes.length ? 'all' : lanes.length === 1 ? lanes[0] : 'custom';
+  const lane = LANE_DEFS.find(d => d.key === document.getElementById('f-lane').value);
+  document.getElementById('board-hint').textContent = lane ? lane.title : BOARD_LABEL.hint;
+  const extra = Object.keys(FILTERS).filter(k => !['status','responsibility'].includes(k) && AXES[k] && FILTERS[k]?.length).length;
+  document.getElementById('advanced-summary').textContent = BOARD_LABEL.advanced + (extra ? ' (' + extra + ')' : '');
+  const active = Object.keys(FILTERS).filter(k => AXES[k] && FILTERS[k]?.length
+    && !(k === 'status' && same(OPEN_STATUSES))).length;
+  const badge = document.getElementById('board-filter-count');
+  badge.hidden = !active; badge.textContent = active;
+  document.getElementById('board-settings-toggle').setAttribute('aria-label', BOARD_LABEL.viewFilters
+    + (active ? ': ' + active + ' ' + BOARD_LABEL.activeFilters : ''));
+  const optionLabel = id => document.getElementById(id).selectedOptions[0]?.textContent || '';
+  const summary = [optionLabel('f-status'), lane ? optionLabel('f-lane') : '', optionLabel('f-group')].filter(Boolean).join(' · ')
+    + (extra ? ' · +' + extra : '');
+  const view = document.getElementById('board-view-summary');
+  view.textContent = summary; view.title = summary + ' · ' + optionLabel('f-sort');
 }
 
 /* 締切までの日数。null = 締切なし */
@@ -637,27 +641,30 @@ function dueDays(due) {
   return Math.round((new Date(due) - new Date(todayStr())) / 86400000);
 }
 function applyFilters() {
+  syncBoardControls();
   savePrefs();
-  if (VIEW_MODE === 'ai') {
-    renderChips();
-    drawAiLane();
-    return;
-  }
-  if (VIEW_MODE === 'quest') {
-    /* クエストログでもチップ（絞り込み条件）は描く。保存済みビュー(v-row)は
-       ウォール専用のまま（.wall-only）なので renderViews() は呼ばない。 */
-    renderChips();
-    drawQuestLog();
-    return;
-  }
   renderChips();
   renderViews();
   const vis = filteredTasks();
-  document.getElementById('task-count').textContent = vis.length + ' 件';
+  document.getElementById('task-count').textContent = vis.length + ' ' + BOARD_LABEL.count;
   drawWall(vis);
+  updateLaneBar();
 }
 
 """ + dashboard_facets.engine_js(_ICON_CHECK_S, _ICON_CROSS_S) + """
+
+/* Keep facet pickers below the quickbar so View remains reachable on short screens. */
+const sharedShowPop = showPop;
+showPop = (anchor, content) => {
+  sharedShowPop(anchor, content);
+  const pop = document.getElementById('f-pop');
+  const top = Math.max(document.querySelector('.board-overview').getBoundingClientRect().bottom,
+    document.querySelector('.board-quickbar').getBoundingClientRect().bottom) + 8;
+  const bottom = document.querySelector('.bottom-nav')?.getBoundingClientRect();
+  const limit = bottom?.height ? bottom.top - 8 : innerHeight - 8;
+  pop.style.maxHeight = Math.max(44, limit - top) + 'px';
+  pop.style.top = Math.max(top, Math.min(parseFloat(pop.style.top), limit - pop.offsetHeight)) + 'px';
+};
 
 /* ===== ビュー設定の永続化（端末ごと・FOCUS と同じ流儀。vault本体は書かない） ===== */
 const PREF_KEY = 'shuki_board_view';
@@ -679,15 +686,19 @@ function loadPrefs() {
   }
   if (Array.isArray(p.display))
     DISPLAY_SEL = p.display.filter(k => DISPLAY_DEFS[k]).slice(0, DISPLAY_MAX);
-  /* ?mode=ai で直接開けるようにする（フォーカス帯・ブリーフィングから飛ばすため。
-     URL 指定があれば端末に保存された前回モードより優先する） */
+  /* Migrate old modes once; legacy links keep their purpose on the shared board. */
   const urlMode = new URLSearchParams(location.search).get('mode');
-  VIEW_MODE = ['wall', 'quest', 'ai'].includes(urlMode) ? urlMode
-            : (p.mode === 'quest' || p.mode === 'ai') ? p.mode : 'wall';
-  applyModeUI();
+  const legacyMode = urlMode || (!p.unified ? p.mode : null);
+  if (legacyMode === 'ai') {
+    document.getElementById('f-group').value = 'responsibility';
+    FILTERS.status = [...OPEN_STATUSES];
+  } else if (legacyMode === 'quest') {
+    document.getElementById('f-group').value = 'project';
+  }
+
 }
 function savePrefs() {
-  const p = { filters:FILTERS, display:DISPLAY_SEL, mode:VIEW_MODE };
+  const p = { filters:FILTERS, display:DISPLAY_SEL, unified:true };
   PREF_IDS.forEach(id => { p[id] = document.getElementById(id).value; });
   try { localStorage.setItem(PREF_KEY, JSON.stringify(p)); } catch(e) {}
 }
@@ -698,7 +709,7 @@ async function init() {
     const r = await fetch('/board/data');
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const d = await r.json();
-    ALL = d.tasks;
+    ALL = (d.tasks || []).filter(t => t.status !== 'archived');
     MAP = {};
     ALL.forEach(t => { MAP[t.id] = t; });
     document.getElementById('loading').style.display = 'none';
@@ -912,11 +923,11 @@ const PRI_DEFS = [
    'High'+'priority' になって語間が詰まるため、丸ごとラベルを引く（2026-09-07）。 */
 const priLabel = (p) => (PRI_DEFS.find(d => d.key === p) || {}).label || p;
 const ST_DEFS = [
-  { key:'in-progress', label:'▶ 進行中',     color:'var(--teal)' },
-  { key:'todo',        label:'todo',          color:'var(--accent)' },
-  { key:'on-hold',     label:'⏸ 保留',       color:'var(--warn)' },
-  { key:'done',        label:'✓ 完了',       color:'var(--teal)' },
-  { key:'cancelled',   label:'✗ キャンセル', color:'var(--muted)' },
+  { key:'in-progress', label:BOARD_LABEL.inProgress,     color:'var(--teal)' },
+  { key:'todo',        label:BOARD_LABEL.todo,          color:'var(--accent)' },
+  { key:'on-hold',     label:BOARD_LABEL.onHold,       color:'var(--warn)' },
+  { key:'done',        label:BOARD_LABEL.done,       color:'var(--teal)' },
+  { key:'cancelled',   label:BOARD_LABEL.cancelled, color:'var(--muted)' },
   { key:'archived',    label:'archived',      color:'var(--muted)' },
 ];
 const DIFF_COLOR = { 5:'var(--danger)', 4:'var(--warn)', 3:'var(--accent)', 2:'var(--blue)', 1:'var(--teal)' };
@@ -933,7 +944,7 @@ function areaDefs() {
 /* プロジェクト／概念ノードへの束ね（2026-08-16）。parent: を辿って行き着いた先が
    collect_board_data() 側で解決済み（tasks-by-tasks の2段階チェーンも1段に畳んである）。
    束ねられないタスク（parent_kind:'none'）は最後に「束ね元なし」でまとめて出す。 */
-function bundleKey(t) { return t.parent_kind === 'none' ? 'none' : (t.parent_kind + ':' + t.project_id); }
+function bundleKey(t) { return !['project','concept'].includes(t.parent_kind) || !t.project_id ? 'none' : (t.parent_kind + ':' + t.project_id); }
 function bundleIcon(kind, color) {
   const svg = kind === 'concept' ? '""" + _ICON_CONCEPT + """' : '""" + _ICON_PROJECT + """';
   return '<span style="display:inline-flex;color:' + color + '">' + svg + '</span>';
@@ -942,7 +953,7 @@ function projectDefs() {
   const n = {};   /* key -> { label, kind, count } */
   ALL.forEach(t => {
     const k = bundleKey(t);
-    if (!n[k]) n[k] = { label: k === 'none' ? '束ね元なし' : t.project_title, kind: t.parent_kind, count: 0 };
+    if (!n[k]) n[k] = { label: k === 'none' ? BOARD_LABEL.noProject : t.project_title, kind: t.parent_kind, count: 0 };
     n[k].count++;
   });
   const keys = Object.keys(n).filter(k => k !== 'none');
@@ -1062,11 +1073,12 @@ function conceptDefs() {
 }
 
 /* 進捗度別は軸ではなく drawWall() で特別に計算する（AXES に入れない）。
-   グループごとに done/total を計算し、完了率で 4 段階に分類する。
+   プロジェクトごとに done/total を計算し、完了率で並べる。
    仕組みは進捗バーを出す時と同じ（groupTasks() で既に done/total を計算済み）。 */
 
 const AXES = {
   area:         { label:'Area',       keyOf:t => t.area || '(未設定)',     defs:areaDefs },
+  responsibility: { label:'責任分担', keyOf:responsibilityKey, defs:() => LANE_DEFS },
   project:      { label:'プロジェクト', keyOf:bundleKey,                    defs:projectDefs },
   concept:      { label:'概念ノード', keyOf:conceptKey,                    defs:conceptDefs },
   status:       { label:'ステータス', keyOf:t => t.status || '(未設定)',   defs:() => ST_DEFS },
@@ -1144,296 +1156,155 @@ function onSortMetricChange() {
   savePrefs();
 }
 
+const GROUP_LIMIT = 8;
+const EXPANDED_GROUPS = new Set();
+const LANE_DEFS = [
+  {key:'ai', label:BOARD_LABEL.ai, color:'var(--muted)',
+    title:BOARD_LABEL.aiHint},
+  {key:'prep', label:BOARD_LABEL.prep, color:'var(--muted)',
+    title:BOARD_LABEL.prepHint},
+  {key:'human', label:BOARD_LABEL.human, color:'var(--muted)',
+    title:BOARD_LABEL.humanHint},
+];
+function responsibilityKey(t) {
+  return t.human_only ? 'human' : LANE_DEFS.some(d => d.key === t.ai_lane) ? t.ai_lane : 'human';
+}
+function taskRowHtml(t) {
+  const done = t.status === 'done', active = OPEN_STATUSES.includes(t.status);
+  const lane = LANE_DEFS.find(d => d.key === responsibilityKey(t));
+  const status = ST_DEFS.find(d => d.key === t.status)?.label || t.status;
+  const due = !done ? dueBadge(t.due) : null;
+  const extras = DISPLAY_SEL.map(k => {
+    const value = DISPLAY_DEFS[k].text(t);
+    return value ? '<span class="chip-extra">' + esc(DISPLAY_DEFS[k].label) + ': ' + esc(value) + '</span>' : '';
+  }).join('');
+  return '<div class="chip' + (done ? ' done' : '') + (LANE_SEL.has(t.id) ? ' sel' : '')
+    + (t.id === FOCUS ? ' focus' : '') + '" data-task-row="' + esc(t.id) + '" data-goto="' + esc(t.id) + '">'
+    + '<label class="task-select" title="まとめて操作するタスクを選択">'
+    + '<input type="checkbox" data-select-task="' + esc(t.id) + '" aria-label="' + esc(t.title) + '"'
+    + (LANE_SEL.has(t.id) || done ? ' checked' : '') + (!active ? ' disabled' : '') + '></label>'
+    + '<button type="button" class="task-open" data-goto="' + esc(t.id) + '">'
+    + '<span class="chip-title">' + (t.id === FOCUS ? (shukiIcon('target') + ' ') : '') + esc(t.title) + '</span>'
+    + '<span class="task-meta"><span>' + esc(status) + '</span>'
+    + (!done ? '<span class="task-owner" title="' + esc(t.ai_reason || lane.title) + '">' + esc(lane.label) + '</span>' : '')
+    + (t.human_only ? ('<span title="手動で自分の担当に指定">' + shukiIcon('lock') + '</span>') : '')
+    + (due ? '<span class="chip-due ' + due.cls + '">' + due.txt + '</span>' : '')
+    + (t.pending || t.ai_pending ? '<span class="chip-pend">' + esc(BOARD_LABEL.pending) + '</span>' : '')
+    + (t.start && t.start.slice(0,10) > todayStr() ? '<span>' + esc(BOARD_LABEL.starts) + ' (' + esc(t.start.slice(0,10)) + ')</span>' : '')
+    + (t.quest && DENSITY !== 'min' ? '<span class="chip-diff" title="難易度 ' + t.quest.difficulty + '/5">' + starStr(t.quest.difficulty) + '</span>' : '')
+    + (!done && t.priority === '高' ? '<span class="chip-due due-over">' + esc(BOARD_LABEL.highPriority) + '</span>' : '')
+    + extras + '</span></button></div>';
+}
 function drawWall(tasks) {
-  const con = document.getElementById('wall-container');
-  const empty = document.getElementById('empty-state');
+  const con = document.getElementById('wall-container'), empty = document.getElementById('empty-state');
   con.innerHTML = '';
-  con.classList.remove('ai-lane');   /* AIレーンから戻った時にグリッド定義を引きずらない */
   if (!tasks.length) { con.style.display = 'none'; empty.style.display = 'flex'; return; }
   con.style.display = 'grid'; empty.style.display = 'none';
-
-  let gk = document.getElementById('f-group').value;
+  const gk = document.getElementById('f-group').value;
   con.classList.toggle('flat', gk === 'none');
-  /* ステータス別だけは進捗バーを出さない（完了グループが常に100%・他が0%＝情報がない） */
-  /* 進捗度別も同様に進捗バーを出さない（進捗度がそのもの） */
-  const showBar = (gk !== 'status' && gk !== 'progress');
-
-  /* 完了進捗は ALL（フィルタと独立）に同じグルーピングを掛けて突き合わせる */
-  const prog = {};
-  if (showBar) {
-    groupTasks(gk, ALL.filter(t => ['todo','in-progress','on-hold','done'].includes(t.status)))
-      .forEach(g => { prog[g.key] = { done:g.items.filter(t => t.status === 'done').length,
-                                      total:g.items.length }; });
-  }
-
-  const sortMetric = SORT_METRICS[document.getElementById('f-sort').value] || SORT_METRICS['pri-due'];
-  const sortDir = document.getElementById('f-sort-dir').value || sortMetric.defaultDir;
-  const cmp = (x, y) => sortMetric.cmp(x, y, sortDir);
-
-  let groups = groupTasks(gk, tasks);
-
-  /* 進捗度別の特別処理。最初に各グループの完了率を計算し、
-     その完了率でグループを再分類する（0-25%, 25-50%, 50-75%, 75-100%）。 */
-  if (gk === 'progress') {
-    const PROGRESS_DEFS = [
-      { key:'0-25', label:'0-25%', min:0, max:25, color:'var(--danger)' },
-      { key:'25-50', label:'25-50%', min:25, max:50, color:'var(--warn)' },
-      { key:'50-75', label:'50-75%', min:50, max:75, color:'var(--accent)' },
-      { key:'75-100', label:'75-100%', min:75, max:101, color:'var(--teal)' },
-    ];
-    const regroup = {};
-    groups.forEach(g => {
-      const done = g.items.filter(t => t.status === 'done').length;
-      const total = g.items.length;
-      const pct = total ? Math.round(done / total * 100) : 0;
-      let pk = '0-25';
-      for (const pd of PROGRESS_DEFS) {
-        if (pct >= pd.min && pct <= pd.max) { pk = pd.key; break; }
-      }
-      if (!regroup[pk]) regroup[pk] = [];
-      regroup[pk].push(g);
-    });
-    groups = PROGRESS_DEFS.map(pd => ({
-      key: pd.key,
-      label: pd.label,
-      color: pd.color,
-      items: (regroup[pd.key] || []).flatMap(g => g.items)
-    })).filter(g => g.items.length);
-  }
-
+  const scope = ALL.filter(t => ['todo','in-progress','on-hold','done'].includes(t.status)
+    && Object.keys(FILTERS).every(k => k === 'status' || !AXES[k] || !FILTERS[k]?.length || axisOn(k,t)));
+  const progress = Object.fromEntries(groupTasks(gk === 'progress' ? 'project' : gk, scope)
+    .map(g => [g.key, {done:g.items.filter(t => t.status === 'done'), total:g.items.length}]));
+  const metric = SORT_METRICS[document.getElementById('f-sort').value] || SORT_METRICS['pri-due'];
+  const dir = document.getElementById('f-sort-dir').value || metric.defaultDir;
+  const cmp = (a,b) => (a.status === 'done') - (b.status === 'done') || metric.cmp(a,b,dir);
+  let groups = groupTasks(gk === 'progress' ? 'project' : gk, tasks);
+  if (gk === 'progress') groups.sort((a,b) => {
+    const pa = progress[a.key], pb = progress[b.key];
+    return dirSign(dir) * ((pa?.done.length || 0) / (pa?.total || 1) - (pb?.done.length || 0) / (pb?.total || 1));
+  });
   groups.forEach(g => {
-    const chips = g.items.slice().sort(cmp);
-    const p = prog[g.key] || { done:0, total:0 };
-    const pct = p.total ? Math.round(p.done / p.total * 100) : 0;
-    const c = g.color;
-
+    const rows = g.items.slice().sort(cmp), p = progress[g.key];
+    const showProgress = ['area','project','concept','progress'].includes(gk) && p?.total;
+    const pct = p?.total ? Math.round(p.done.length / p.total * 100) : 0;
     const card = document.createElement('div');
-    card.className = 'area-card' + (gk === 'project' && g.key !== 'none' ? ' bundle' : '');
-    card.style.setProperty('--ac', c);
-
-    let h = '<div class="ac-hd">'
-      /* Area以外にはアイコンが無いので、同じ位置に色ドットを置いて色の担い手を揃える
-         （ラベル文字自体は塗らない＝「色はアイコンが持つ」/ UIデザイン原則） */
-      + (g.icon ? '<span class="ac-icon">' + g.icon + '</span>'
-                : '<span class="ac-dot" style="background:' + c + '"></span>')
-      + '<span class="ac-name">' + esc(g.label) + '</span>'
-      + '<span class="ac-count">' + chips.length + '件'
-      + (p.total ? ' · ' + p.done + '/' + p.total : '') + '</span></div>';
-    if (p.total)
-      h += '<div class="ac-bar"><div class="ac-bar-fill" style="width:' + pct + '%"></div></div>';
-
-    h += '<div class="ac-chips">';
-    chips.forEach(t => {
-      const db = dueBadge(t.due);
-      const q = t.quest;
-      const age = ageDays(t.created);
-      /* 起票日は全チップの tooltip に載せ、表面に出すのは60日以上の滞留だけ（90日以上は .old）。
-         30日で出すと62件中29件に付いて「常にある飾り」になり、期限バッジまで埋もれた。 */
-      const tip = (age === null) ? '' : ' title="起票 ' + esc(t.created) + '（' + age + '日前）"';
-      const ageChip = (age !== null && age >= 60 && t.status !== 'done')
-        ? '<span class="chip-age' + (age >= 90 ? ' old' : '') + '">' + age + 'd</span>' : '';
-      /* まだ .md に書かれていない押下（次便で反映）。完了フィルタをONにして作業している時は
-         チップが消えないため、この印だけが「効いた」ことを示す手がかりになる。 */
-      const pendChip = t.pending
-        ? '<span class="chip-pend" title="変更を予約済み。次便で .md に反映されます">⏳</span>' : '';
-      /* 👁 表示プロパティ（2026-08-16）: 最小密度では難易度★・滞留バッジも隠し、
-         追加プロパティ（DISPLAY_SEL）はいずれの密度でも選ばれていれば出す。 */
-      const extraChips = DISPLAY_SEL.map(k => {
-        const txt = DISPLAY_DEFS[k].text(t);
-        return txt ? '<span class="chip-extra">' + esc(DISPLAY_DEFS[k].label) + ': ' + esc(txt) + '</span>' : '';
-      }).join('');
-      h += '<div class="chip' + (t.status === 'done' ? ' done' : '')
-        + (t.id === FOCUS ? ' focus' : '') + '" data-goto="' + esc(t.id) + '"' + tip + '>'
-        + '<span class="chip-dot p-' + esc(t.priority || '') + '"></span>'
-        + (t.id === FOCUS ? '<span class="chip-star">🎯</span>' : '')
-        + (t.status === 'in-progress' ? '<span class="chip-star">▶</span>' : '')
-        + '<span class="chip-title">' + esc(t.title) + '</span>'
-        /* モバイルでのみ効く改行（.chip-br）。これが無いと、幅の小さいバッジ（★★）だけが
-           タイトル行に残り、大きいバッジ（期限）が次行へ落ちて段組が揃わない（2026-08-08） */
-        + '<span class="chip-br"></span>'
-        + (q && DENSITY !== 'min' ? '<span class="chip-diff" title="難易度 ' + q.difficulty + '/5">' + starStr(q.difficulty) + '</span>' : '')
-        + extraChips
-        + pendChip
-        + (DENSITY !== 'min' ? ageChip : '')
-        + (db ? '<span class="chip-due ' + db.cls + '">' + db.txt + '</span>' : '')
-        + '</div>';
-    });
-    h += '</div>';
+    card.className = 'area-card'; card.style.setProperty('--ac', g.color);
+    const key = gk + ':' + g.key;
+    const expanded = EXPANDED_GROUPS.has(key);
+    let h = '<div class="ac-hd">' + (g.icon ? '<span class="ac-icon">' + g.icon + '</span>' : '')
+      + '<span class="ac-name">' + esc(g.label) + '</span><span class="ac-count">' + rows.length + ' ' + esc(BOARD_LABEL.count) + '</span></div>';
+    if (showProgress) h += '<div class="ac-count" style="margin:0 0 6px">' + p.done.length + ' / ' + p.total + ' ' + esc(BOARD_LABEL.done) + '</div>'
+      + '<div class="ac-bar" role="progressbar" aria-label="' + esc(g.label) + '" aria-valuemin="0" aria-valuemax="' + p.total
+      + '" aria-valuenow="' + p.done.length + '" title="' + p.done.length + ' / ' + p.total + '">'
+      + '<div class="ac-bar-fill" style="width:' + pct + '%"></div></div>';
+    h += '<div class="ac-chips">' + rows.slice(0,expanded ? rows.length : GROUP_LIMIT).map(taskRowHtml).join('') + '</div>';
     card.innerHTML = h;
+    if (rows.length > GROUP_LIMIT) {
+      const more = document.createElement('button'); more.type = 'button'; more.className = 'board-secondary group-more';
+      more.textContent = expanded ? BOARD_LABEL.fewer : BOARD_LABEL.more + ' (' + rows.length + ')';
+      more.setAttribute('aria-expanded', String(expanded));
+      more.onclick = () => { expanded ? EXPANDED_GROUPS.delete(key) : EXPANDED_GROUPS.add(key); applyFilters(); };
+      card.appendChild(more);
+    }
+    // Completed project tasks use the same rows. No hidden status-filter exception.
+    if (['project','concept','progress'].includes(gk) && p?.done.length && !rows.some(t => t.status === 'done')) {
+      const completed = p.done.filter(t => !document.getElementById('f-search').value.trim()
+        || t.title.toLowerCase().includes(document.getElementById('f-search').value.trim().toLowerCase()));
+      if (completed.length) {
+        const details = document.createElement('details'); details.className = 'completed-tasks';
+        details.innerHTML = '<summary>' + esc(BOARD_LABEL.completed) + ' (' + completed.length + ')</summary><div class="ac-chips">'
+          + completed.map(taskRowHtml).join('') + '</div>';
+        card.appendChild(details);
+      }
+    }
     con.appendChild(card);
   });
 }
-
-/* ===== 📋 クエストログ（2026-08-25） =====
-   束ね元（プロジェクト／概念ノード）＝箱、タスク＝チェックボックスとして見せる表示方式。
-   🧱ウォールと違い done を消さない（✓のまま残す）。箱が100%埋まったら演出を出し、
-   クリア済み棚（折りたたみ）へ畳む＝「ためてためて消す」の実装（ユーザーのフィードバック）。
-   概念ノード由来の深掘りタスクは1件=1親（=1箱）になってしまうため、ここだけ特別に
-   「概念の深掘り」という単一の仮想箱へ束ね直す（深掘りタスクの空白を可視化する試作を作る、を吸収）。 */
-const CONCEPT_BOX_KEY = 'concept:_all';
-const CONCEPT_BOX_LABEL = '概念の深掘り';
-const CLEARED_KEY = 'shuki_board_cleared_boxes';
-/* この件数を超えた箱だけ、中身を起票月のサブ見出しで割る（2026-08-31・横並びしすぎ対策） */
-const QL_NEST_THRESHOLD = 10;
-function loadClearedSet() {
-  try { return new Set(JSON.parse(localStorage.getItem(CLEARED_KEY) || '[]')); } catch(e) { return new Set(); }
-}
-function saveClearedSet(s) {
-  try { localStorage.setItem(CLEARED_KEY, JSON.stringify([...s])); } catch(e) {}
-}
-
-/* ウォールと違い検索(q)は箱ごとに別処理（下の matchesSearch）で見せたいので、
-   ここでは軸フィルタ（プロジェクト・起票日等）だけを見る。status は applyModeUI() が
-   AXES から外しているので自動的に無視される（2026-09-03）。 */
-function questFilterOn(t) {
-  const on = Object.keys(FILTERS).filter(k => AXES[k] && FILTERS[k] && FILTERS[k].length);
-  return on.every(k => axisOn(k, t));
-}
-/* ===== 🤖 AIレーン（2026-09-04 新設） =====================================
-   目的は「今どれをAIに任せられるか」を一望し、まとめて指示すること。
-   レーン（ai / prep / human）はサーバーの ai_lane.py が毎回導出した値をそのまま使い、
-   ここでは判定をしない（画面とバッチとエージェントで判定がズレると事故るため）。
-   ユーザーの操作で vault に保存されるのは human_only だけ。 */
-const LANE_DEFS = [
-  { key:'ai',    icon:'🤖', label:'AIが進める',
-    desc:'完了までAIが持っていける。まとめて選んで「AIに任せる」を押せば次の便が実行する。' },
-  { key:'prep',  icon:'🤝', label:'下ごしらえはAI',
-    desc:'調べる・比べる・下書きまではAI。お金／外部送信／健康の最終アクション直前でユーザーに戻る。' },
-  { key:'human', icon:'🧠', label:'ユーザーのみ',
-    desc:'非公開Area・内省・学習・対面など。自動で外れているのでマークは要らない。' },
-];
-let LANE_SEL = new Set();
-
-function laneTasks() {
-  /* 生きているタスクだけを対象にする。done を混ぜると「任せる」対象として選べてしまう。 */
-  return filteredTasks().filter(t => t.status === 'todo' || t.status === 'in-progress');
-}
-function startWaitBadge(start) {
-  const date = (start || '').slice(0, 10);
-  return date && date > todayStr()
-    ? '<span class="li-start-wait">開始待ち（' + esc(date) + '）</span>' : '';
-}
-function drawAiLane() {
-  const con = document.getElementById('wall-container');
-  const empty = document.getElementById('empty-state');
-  con.innerHTML = '';
-  con.classList.remove('flat', 'quest-log');
-  con.classList.add('ai-lane');
-  con.style.display = 'grid'; empty.style.display = 'none';
-
-  const tasks = laneTasks();
-  document.getElementById('task-count').textContent = tasks.length + ' 件';
-
-  LANE_DEFS.forEach(def => {
-    const items = tasks.filter(t => (t.ai_lane || 'human') === def.key)
-                       .sort((a, b) => (a.due || '9999').localeCompare(b.due || '9999'));
-    const col = document.createElement('div');
-    col.className = 'lane-col';
-    let h = '<div class="lane-hd"><div class="lh-t">' + def.icon + ' ' + esc(def.label)
-          + '<span class="lh-n">' + items.length + ' 件</span></div>'
-          + '<div class="lh-d">' + esc(def.desc) + '</div></div><div class="lane-body">';
-    if (!items.length) {
-      h += '<div class="lane-empty">なし</div>';
-    } else {
-      items.forEach(t => {
-        /* 誰が実行するかを明示する。dispatch=12:30便が拾える／session=本体セッション待ち。
-           ここを隠すと「AIが進める」と表示しながら誰も実行しない嘘になる。 */
-        const rl = t.ai_runner === 'dispatch' ? '<span class="li-runner dispatch">🚚 12:30便</span>'
-                 : t.ai_runner === 'session'  ? '<span class="li-runner">💬 セッション</span>' : '';
-        const startWait = startWaitBadge(t.start);
-        const due = t.due ? ('〆' + t.due.slice(5)) : '';
-        h += '<label class="lane-item' + (LANE_SEL.has(t.id) ? ' sel' : '') + '" data-lane-id="'
-           + esc(t.id) + '">'
-           /* id は data 属性から読む。ハンドラ引数に直接埋めるとタイトル由来の
-              クォートでJSが壊れる（このページは Python の三重引用符の中にあるため
-              バックスラッシュでのエスケープが効かない・2026-09-04 実装時に踏んだ） */
-           + '<input type="checkbox"' + (LANE_SEL.has(t.id) ? ' checked' : '')
-           + ' onchange="toggleLaneSel(this)">'
-           + '<span class="li-main"><span class="li-title">' + esc(t.title) + '</span>'
-           + '<span class="li-meta">' + startWait + rl + esc(t.ai_reason || '')
-           + (due ? ' ・ ' + due : '')
-           + (t.human_only ? ' ・ 🔒手動指定' : '') + '</span></span></label>';
-      });
-    }
-    col.innerHTML = h + '</div>';
-    con.appendChild(col);
-  });
-  updateLaneBar();
-}
 function toggleLaneSel(cb) {
-  const item = cb.closest('.lane-item');
-  if (!item) return;
-  const id = item.dataset.laneId;
+  const id = cb.dataset.selectTask;
   if (cb.checked) LANE_SEL.add(id); else LANE_SEL.delete(id);
-  item.classList.toggle('sel', cb.checked);
+  cb.closest('.chip').classList.toggle('sel', cb.checked);
   updateLaneBar();
 }
 function clearLaneSel() {
   LANE_SEL.clear();
-  document.querySelectorAll('.lane-item.sel').forEach(el => el.classList.remove('sel'));
-  document.querySelectorAll('.lane-item input:checked').forEach(el => { el.checked = false; });
+  document.querySelectorAll('[data-select-task]:enabled').forEach(cb => {
+    cb.checked = false; cb.closest('.chip').classList.remove('sel');
+  });
   updateLaneBar();
 }
+function selectVisibleTasks() {
+  document.querySelectorAll('[data-select-task]:enabled').forEach(cb => { cb.checked = true; toggleLaneSel(cb); });
+}
 function updateLaneBar() {
+  const visible = new Set([...document.querySelectorAll('[data-select-task]')].filter(cb => OPEN_STATUSES.includes(MAP[cb.dataset.selectTask]?.status)).map(cb => cb.dataset.selectTask));
+  LANE_SEL.forEach(id => { if (!visible.has(id)) LANE_SEL.delete(id); });
   const bar = document.getElementById('lane-bar');
   document.getElementById('lb-count').textContent = LANE_SEL.size;
-  bar.classList.toggle('on', LANE_SEL.size > 0 && VIEW_MODE === 'ai');
+  bar.classList.toggle('on', LANE_SEL.size > 0);
+  bar.setAttribute('aria-busy', String(BULK_BUSY));
+  bar.querySelectorAll('button').forEach(b => { b.disabled = BULK_BUSY; });
+  document.getElementById('allow-ai').disabled = BULK_BUSY || ![...LANE_SEL].some(id => MAP[id]?.human_only);
+  document.getElementById('select-visible').disabled = BULK_BUSY || !visible.size;
+}
+function setBulkBusy(busy) {
+  BULK_BUSY = busy; updateLaneBar();
+  document.querySelectorAll('[data-select-task]').forEach(cb => { cb.disabled = busy || !OPEN_STATUSES.includes(MAP[cb.dataset.selectTask]?.status); });
 }
 
-/* 選択したタスクをまとめて ui-queue に積む。vault への書き込みはサーバーがせず、
-   次の回収便（3時間おき inbox 便 ⓪ / 12:30便）が反映する＝既存の書き戻し流儀と同じ。
-   action: dispatch   … human_only を外し、内容から担当エージェントを割り当てられれば割り当てる
-           human_only … human_only: true を立てる（AIに触らせない）
-           ai_ok      … human_only を外してAI側へ戻す */
+/* Queue the manual human_only preference. Capability and runner stay server-derived. */
 async function applyLaneAction(action) {
-  let ids = [...LANE_SEL];
-  if (!ids.length) return;
-  const LABEL = { dispatch:'AIに任せる', human_only:'自分でやる', ai_ok:'AIに戻す' };
-
-  /* 🚚AIに任せる は「🧠ユーザーのみ」列（human_only か lane==human）のタスクにしか意味がない。
-     既に ai/prep レーンのタスクは押しても no-op（サーバー側も何も変えない）なのに
-     画面だけ「次便で実行」と表示していた実バグ（2026-09-06 発覚）への対処。 */
-  if (action === 'dispatch') {
-    const targets = ids.filter(id => MAP[id] && (MAP[id].human_only || MAP[id].ai_lane === 'human'));
-    const skipped = ids.length - targets.length;
-    if (!targets.length) {
-      showToast('""" + _ICON_CROSS + """ 選択した ' + ids.length + ' 件は既にAIレーンです（操作不要・次便が拾います）', true);
-      return;
-    }
-    if (skipped) showToast(skipped + ' 件は既にAIレーンのため対象外にしました', true);
-    ids = targets;
-  }
-
-  try {
-    for (const id of ids) {
-      const t = MAP[id];
-      if (!t) continue;
-      const r = await fetch('/queue', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'ai_lane_change', payload: {
-          task_path: t.path, task_title: t.title, action: action,
-          lane: t.ai_lane, runner: t.ai_runner,
-          date: todayStr(), time: timeStr(),
-        }}),
-      });
+  if (BULK_BUSY) return;
+  const targets = [...LANE_SEL].map(id => MAP[id]).filter(t => t && OPEN_STATUSES.includes(t.status)
+    && (action === 'human_only' ? !t.human_only : t.human_only));
+  if (!targets.length) return;
+  setBulkBusy(true);
+  let ok = 0, failed = 0;
+  for (const t of targets) {
+    try {
+      const r = await fetch('/queue', {method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({name:'ai_lane_change', payload:{task_path:t.path, task_title:t.title, action,
+          lane:t.ai_lane, runner:t.ai_runner, date:todayStr(), time:timeStr()}})});
       if (!r.ok) throw new Error('HTTP ' + r.status);
-      /* 画面を即座に追随させる（vault は次便まで変わらないので、ここで戻すと押した実感が消える）。
-         runner（dispatch/session のどちら扱いになるか）はサーバー側の再判定結果なので、
-         ここでは決め打ちしない（2026-09-06: 'dispatch'固定にしていたのが実態と乖離するバグだった）。 */
-      if (action === 'human_only') { t.human_only = true; t.ai_lane = 'human'; t.ai_runner = '';
-                                     t.ai_reason = 'ユーザーが「自分でやる」を指定（次便で反映）'; }
-      if (action === 'ai_ok')      { t.human_only = false; t.ai_lane = 'ai';
-                                     t.ai_reason = 'AI側へ戻した（次便で担当を再判定）'; }
-      if (action === 'dispatch')   { t.human_only = false; t.ai_lane = 'ai';
-                                     t.ai_reason = 'AI側へ開放（次便で担当を再判定）'; }
-    }
-    clearLaneSel();
-    applyFilters();
-    showToast('""" + _ICON_CHECK + """ ' + ids.length + ' 件を「' + LABEL[action] + '」で予約しました。次便で反映します');
-  } catch(e) {
-    showToast('""" + _ICON_CROSS + """ 予約できませんでした（' + e + '）', true);
+      t.human_only = action === 'human_only';
+      t.ai_pending = true; // The server reclassifies capability and runner; never invent AI eligibility here.
+      LANE_SEL.delete(t.id); ok++;
+    } catch(e) { failed++; }
   }
+  setBulkBusy(false);
+  applyFilters();
+  showToast(ok + ' ' + BOARD_LABEL.queued + (failed ? ' · ' + failed + ' ' + BOARD_LABEL.failed : ''), failed > 0);
 }
 
 /* 選択したタスクをまとめて完了にする。
@@ -1441,11 +1312,13 @@ async function applyLaneAction(action) {
    vault直接書き込み禁止・次便反映の流儀を崩さない。各タスクは独立して送るので、
    一部失敗時も成功分だけを画面から反映する。 */
 async function applyBulkTaskStatus(newStatus) {
+  if (BULK_BUSY) return;
   const ids = [...LANE_SEL];
-  const targets = ids.map(id => MAP[id]).filter(t => t && t.status !== newStatus);
+  const targets = ids.map(id => MAP[id]).filter(t => t && OPEN_STATUSES.includes(t.status) && t.status !== newStatus);
   if (!targets.length) return;
-  if (!confirm(targets.length + '件を「完了」に変更予約します。よろしいですか？')) return;
+  if (!confirm(BOARD_LABEL.confirmComplete.replace('%n', targets.length))) return;
 
+  setBulkBusy(true);
   let ok = 0;
   const failed = [];
   for (const t of targets) {
@@ -1463,283 +1336,21 @@ async function applyBulkTaskStatus(newStatus) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
       t.status = newStatus;
       t.pending = true;
+      LANE_SEL.delete(t.id);
       ok++;
     } catch (e) {
       failed.push(t.title);
     }
   }
 
-  clearLaneSel();
+  setBulkBusy(false);
   applyFilters();
   if (ok && window.SFX) SFX.task_complete();
   if (failed.length) {
-    showToast('✓ ' + ok + '件を完了予約。' + failed.length + '件は失敗しました', true);
+    showToast(ok + ' ' + BOARD_LABEL.queued + ' · ' + failed.length + ' ' + BOARD_LABEL.failed, true);
   } else {
-    showToast('✓ ' + ok + '件を完了に変更予約しました。次便で反映します');
+    showToast(ok + ' ' + BOARD_LABEL.queued);
   }
-}
-
-function drawQuestLog() {
-  const con = document.getElementById('wall-container');
-  const empty = document.getElementById('empty-state');
-  con.innerHTML = '';
-  con.classList.remove('flat', 'ai-lane');
-  con.classList.add('quest-log');
-
-  const q = (document.getElementById('f-search').value || '').trim().toLowerCase();
-
-  /* ===== 箱の構成単位（2026-08-26）=====
-     従来はプロジェクト/概念ノード固定だったが、f-group の軸を流用して他の切り口
-     （Area・締切・優先度・完了日・所要時間・効率…）でも箱を作れるようにした。
-     対象タスクの範囲（束ね元を持つタスクのみ）は変えない＝ウォールに流れるタスクの量は
-     変わらず、あくまで「どう束ねるか」だけを選べるようにする。 */
-  const gk = document.getElementById('f-group').value;
-  const eligible = ALL.filter(t =>
-    (t.parent_kind === 'project' || t.parent_kind === 'concept') && t.status !== 'cancelled' && questFilterOn(t));
-
-  const boxes = {};
-  if (gk === 'project' || gk === 'none' || gk === 'progress') {
-    /* 既定＝プロジェクト単位。概念ノードは全部まとめて1箱（従来どおり）。
-       進捗度別（gk==='progress'）はタスク単体の属性でなく箱の完了率という集約値なので、
-       箱自体はプロジェクト単位のまま作り、進捗度は表示時のグループ見出しとしてのみ使う
-       （箱の中身がプロジェクト単位を保つ＝チェックリストとしての意味が壊れない）。 */
-    eligible.forEach(t => {
-      let key, label, kind;
-      if (t.parent_kind === 'project') { key = 'project:' + t.project_id; label = t.project_title; kind = 'project'; }
-      else { key = CONCEPT_BOX_KEY; label = CONCEPT_BOX_LABEL; kind = 'concept'; }
-      if (!boxes[key]) boxes[key] = { key, label, kind, items:[] };
-      boxes[key].items.push(t);
-    });
-  } else if (AXES[gk]) {
-    /* 他の軸：AXES[軸].keyOf/defs で束ねる（絞り込みと同じ定義を再利用） */
-    const ax = AXES[gk];
-    const defsByKey = {};
-    ax.defs().forEach(d => { defsByKey[d.key] = d; });
-    eligible.forEach(t => {
-      const key = ax.keyOf(t);
-      if (!boxes[key]) {
-        const def = defsByKey[key];
-        boxes[key] = { key, label: def ? def.label : key, kind:'axis',
-          color: def ? def.color : 'var(--muted)', icon: def ? def.icon : null, items:[] };
-      }
-      boxes[key].items.push(t);
-    });
-  } else {
-    /* 未知の値へのフォールバック（AXES 削除・typo 対策） */
-    eligible.forEach(t => {
-      let key, label, kind;
-      if (t.parent_kind === 'project') { key = 'project:' + t.project_id; label = t.project_title; kind = 'project'; }
-      else { key = CONCEPT_BOX_KEY; label = CONCEPT_BOX_LABEL; kind = 'concept'; }
-      if (!boxes[key]) boxes[key] = { key, label, kind, items:[] };
-      boxes[key].items.push(t);
-    });
-  }
-
-  const clearedSeen = loadClearedSet();
-  const activeList = [], clearedList = [], newlyCleared = [];
-  Object.values(boxes).forEach(box => {
-    const items = box.items.filter(t => t.status !== 'cancelled');
-    if (!items.length) return;
-    box.items = items;
-    box.done = items.filter(t => t.status === 'done' || t.status === 'archived').length;
-    box.total = items.length;
-    const isCleared = box.done === box.total;
-    if (isCleared) {
-      clearedList.push(box);
-      if (!clearedSeen.has(box.key)) newlyCleared.push(box);
-    } else {
-      activeList.push(box);
-    }
-  });
-
-  const matchesSearch = box => !q || box.items.some(t => t.title.toLowerCase().includes(q));
-  const activeShown = activeList.filter(matchesSearch);
-  const clearedShown = clearedList.filter(matchesSearch);
-
-  document.getElementById('task-count').textContent =
-    activeList.length + ' 束・残り' + activeList.reduce((s, b) => s + (b.total - b.done), 0) + '件';
-
-  if (!activeShown.length && !clearedShown.length) {
-    con.style.display = 'none'; empty.style.display = 'flex';
-    return;
-  }
-  con.style.display = 'flex'; empty.style.display = 'none';
-
-  const grid = document.createElement('div');
-  grid.className = 'ql-boxes';
-
-  /* ===== 箱（グループ）の並び順（2026-08-26）=====
-     「起票日でグルーピングしたら起票日順に並んでほしい」に対応。f-sort-dir の向きを
-     「箱の並び順の向き」として流用する（applyModeUI() でツールチップも出し分け済み）。 */
-  const qlDir = (document.getElementById('f-sort-dir').value || 'desc') === 'asc' ? 1 : -1;
-
-  if (gk === 'progress') {
-    /* 進捗度別（2026-08-26）: プロジェクト単位の箱を維持したまま、完了率でグループ見出しを付ける。
-       箱の中身は変えない＝チェックリストとしての意味を保ったまま「停滞しているプロジェクトを
-       見つけたい」というニーズに応える。グループの並び順（0-25%→75-100%が既定＝降順）は
-       f-sort-dir で反転できる。 */
-    const PROGRESS_DEFS = [
-      { key:'0-25', label:'0-25%', min:0, max:25 },
-      { key:'25-50', label:'25-50%', min:25, max:50 },
-      { key:'50-75', label:'50-75%', min:50, max:75 },
-      { key:'75-100', label:'75-100%', min:75, max:101 },
-    ];
-    const byBucket = {};
-    activeShown.forEach(box => {
-      const pct = box.total ? (box.done / box.total * 100) : 0;
-      const bucket = PROGRESS_DEFS.find(d => pct >= d.min && pct < d.max) || PROGRESS_DEFS[0];
-      (byBucket[bucket.key] = byBucket[bucket.key] || []).push(box);
-    });
-    const orderedDefs = qlDir === 1 ? PROGRESS_DEFS : PROGRESS_DEFS.slice().reverse();
-    orderedDefs.forEach(d => {
-      const list = byBucket[d.key];
-      if (!list || !list.length) return;
-      list.sort((a, b) => (b.done / b.total) - (a.done / a.total) || b.total - a.total);
-      const hd = document.createElement('div');
-      hd.style.cssText = 'grid-column:1/-1;font-size:.85rem;font-weight:bold;color:var(--muted);'
-        + 'padding:12px 14px 8px;border-bottom:1px solid var(--line);margin-bottom:8px;';
-      hd.textContent = d.label + '（' + list.length + '束）';
-      grid.appendChild(hd);
-      list.forEach(box => grid.appendChild(renderQuestBox(box, q)));
-    });
-  } else if (gk !== 'project' && gk !== 'none' && AXES[gk]) {
-    /* 軸ベースの箱：AXES[軸].defs() の表示順（絞り込みの値ピッカーと同じ順。
-       起票日別なら新しい日から、締切別なら期限切れ→今日→…の順、等）に並べる。
-       defs にないキー（データにだけ存在する値）は末尾へ固定。f-sort-dir で全体反転。 */
-    const order = {};
-    AXES[gk].defs().forEach((d, i) => { order[d.key] = i; });
-    activeShown.sort((a, b) => qlDir * ((order[a.key] ?? 999) - (order[b.key] ?? 999)));
-    activeShown.forEach(box => grid.appendChild(renderQuestBox(box, q)));
-  } else {
-    /* プロジェクト/概念ノード単位（2026-08-30: f-sort に連動）。
-       既定（pri-due）は従来どおり「埋まっている箱ほど手前」の進捗率ソート
-       （f-sort-dir で反転）。due/diff/created/efficiency 等を選んだ場合は、
-       箱の中の未完了タスクのうち最もその指標が良いもの＝「このプロジェクトで
-       一番差し迫った/重い1件」を代表値として箱どうしを比較する。 */
-    const qlMetricKey = document.getElementById('f-sort').value;
-    if (qlMetricKey === 'pri-due' || !SORT_METRICS[qlMetricKey]) {
-      activeShown.sort((a, b) => qlDir * -1 * ((b.done / b.total) - (a.done / a.total) || b.total - a.total));
-    } else {
-      /* m.cmp は dir 文字列から自分で向きを作る（dirSign）ため、qlDir(±1)を
-         そのまま乗算すると defaultDir='desc' の軸で二重に反転してしまう。
-         f-sort-dir の現在値をそのまま dir 文字列として渡す（2026-08-30 修正）。 */
-      const m = SORT_METRICS[qlMetricKey];
-      const dirStr = document.getElementById('f-sort-dir').value || m.defaultDir;
-      activeShown.forEach(box => { box._rep = boxRepresentative(box, m); });
-      activeShown.sort((a, b) => m.cmp(a._rep, b._rep, dirStr));
-    }
-    activeShown.forEach(box => grid.appendChild(renderQuestBox(box, q)));
-  }
-  con.appendChild(grid);
-
-  if (clearedShown.length) {
-    const tgl = document.createElement('div');
-    tgl.className = 'ql-cleared-toggle';
-    tgl.textContent = '🏆 クリア済み（' + clearedShown.length + '）';
-    const list = document.createElement('div');
-    list.className = 'ql-cleared-list';
-    tgl.onclick = () => { list.style.display = (list.style.display === 'flex') ? 'none' : 'flex'; };
-    clearedShown.forEach(box => {
-      const row = document.createElement('div');
-      row.className = 'ql-cleared-row';
-      row.textContent = '✓ ' + box.label + '（' + box.total + '件）';
-      list.appendChild(row);
-    });
-    con.appendChild(tgl);
-    con.appendChild(list);
-  }
-
-  /* クリア演出は初回のみ（localStorageに記録し、リロードのたびに再発火させない） */
-  if (newlyCleared.length) {
-    newlyCleared.forEach(b => clearedSeen.add(b.key));
-    saveClearedSet(clearedSeen);
-    const rect = con.getBoundingClientRect();
-    burstAt(rect.left + rect.width / 2, rect.top + 30);
-    const first = newlyCleared[0];
-    showToast('🏆 「' + esc(first.label) + '」クリア！'
-      + (newlyCleared.length > 1 ? '　他' + (newlyCleared.length - 1) + '件' : ''));
-  }
-}
-
-/* 箱（プロジェクト/概念）の代表タスク（2026-08-30）: 指標 m で箱の中の未完了タスクを
-   並べた時の先頭＝「このプロジェクトで一番差し迫った/重い1件」。未完了が無ければ
-   完了済みも含めて代表を出す（クリア済み棚に落ちる前の空箱を避けるため）。 */
-function boxRepresentative(box, m) {
-  const undone = box.items.filter(t => t.status !== 'done' && t.status !== 'archived');
-  const pool = undone.length ? undone : box.items;
-  return pool.slice().sort((a, b) => m.cmp(a, b, m.defaultDir))[0];
-}
-
-function renderQuestBox(box, q) {
-  const card = document.createElement('div');
-  /* box.kind==='axis'（プロジェクト/概念以外の軸で束ねた箱）は AXES の defs() が返した
-     color/icon をそのまま使う。従来の project/concept 箱は kind で色分け（変更なし）。 */
-  const color = box.color || (box.kind === 'concept' ? 'var(--blue)' : 'var(--accent)');
-  const icon = box.icon != null ? box.icon
-    : (box.kind === 'concept' ? '""" + _ICON_CONCEPT + """' : '""" + _ICON_PROJECT + """');
-  card.className = 'area-card' + (box.kind !== 'axis' ? ' bundle' : '');
-  card.style.setProperty('--ac', color);
-  const pct = box.total ? Math.round(box.done / box.total * 100) : 0;
-
-  let h = '<div class="ac-hd">'
-    + (icon ? '<span class="ac-icon" style="color:' + color + '">' + icon + '</span>'
-            : '<span class="ac-dot" style="background:' + color + '"></span>')
-    + '<span class="ac-name">' + esc(box.label) + '</span>'
-    + '<span class="ac-count">' + box.done + '/' + box.total + '</span></div>'
-    + '<div class="ac-bar"><div class="ac-bar-fill" style="width:' + pct + '%"></div></div>'
-    + '<div class="ql-rows">';
-
-  /* 箱内タスクの並び順（2026-08-30）: 未完了→完了を最優先に保ったまま、
-     未完了どうしの並びだけ f-sort で選んだ指標に従う（既定=優先度→締切。従来の
-     締切固定ソートと後方互換）。f-sort-dir は箱の並び順の向きに使っているため、
-     箱内はここでは向きを揺らさず metric の defaultDir 固定にする（2軸を1つの
-     セレクトに詰め込みすぎない）。 */
-  const qlMetric = SORT_METRICS[document.getElementById('f-sort').value] || SORT_METRICS['pri-due'];
-  const rows = box.items.filter(t => !q || t.title.toLowerCase().includes(q))
-    .slice()
-    .sort((a, b) => {
-      const ad = (a.status === 'done' || a.status === 'archived') ? 1 : 0;
-      const bd = (b.status === 'done' || b.status === 'archived') ? 1 : 0;
-      return ad - bd || qlMetric.cmp(a, b, qlMetric.defaultDir) || DUE_CMP(a, b);
-    });
-
-  const rowHtml = t => {
-    const done = t.status === 'done' || t.status === 'archived';
-    const db = !done ? dueBadge(t.due) : null;
-    return '<div class="ql-row' + (done ? ' done' : '') + '" data-goto="' + esc(t.id) + '">'
-      + '<span class="ql-box">' + (done ? '""" + _ICON_CHECK + """' : '') + '</span>'
-      + '<span class="ql-title">' + esc(t.title) + '</span>'
-      + (!done && t.quest ? '<span class="chip-diff" title="難易度 ' + t.quest.difficulty + '/5">' + starStr(t.quest.difficulty) + '</span>' : '')
-      + (db ? '<span class="chip-due ' + db.cls + '">' + db.txt + '</span>' : '')
-      + '</div>';
-  };
-
-  /* 中間単位（2026-08-31）: プロジェクト／概念の深掘り箱で件数が閾値を超えたら、
-     中身を起票月のサブ見出しで割る。閾値以下・軸グルーピング（box.kind==='axis'＝
-     そもそも起票月別など別軸で束ねている）は従来どおり1リストのまま。
-     月内の並び（未完了→完了→f-sort指標）は上の rows をそのまま流用＝グローバルな並びを崩さない。 */
-  const byMonth = {};
-  rows.forEach(t => {
-    const k = t.created ? t.created.slice(0, 7) : '(不明)';
-    (byMonth[k] = byMonth[k] || []).push(t);
-  });
-  /* 閾値超＋起票月が2つ以上ある箱だけサブ分割（全部同月なら見出し1本だけ出ても
-     区切りにならないのでフラットのまま） */
-  if (box.kind !== 'axis' && rows.length > QL_NEST_THRESHOLD && Object.keys(byMonth).length > 1) {
-    Object.keys(byMonth)
-      .sort((a, b) => (a === '(不明)') - (b === '(不明)') || b.localeCompare(a))  /* 新しい月から・不明は末尾 */
-      .forEach(k => {
-        const label = k === '(不明)' ? '起票日なし' : k.slice(0, 4) + '年' + (+k.slice(5, 7)) + '月';
-        h += '<div class="ql-subhead">' + label + '（' + byMonth[k].length + '）</div>';
-        byMonth[k].forEach(t => { h += rowHtml(t); });
-      });
-  } else {
-    rows.forEach(t => { h += rowHtml(t); });
-  }
-
-  h += '</div>';
-  card.innerHTML = h;
-  return card;
 }
 
 /* ===== クエスト効果ブロック（board_quests.json 由来。generate_board_quests.py がバッチ生成） ===== */
@@ -1747,12 +1358,12 @@ function questBlock(q) {
   const wrap = document.createElement('div');
   wrap.className = 'dp-quest';
   if (!q) {
-    wrap.innerHTML = '<div class="dq-hd">🎮 クエスト効果</div>'
+    wrap.innerHTML = ('<div class="dq-hd">' + shukiIcon('gamepad') + ' クエスト効果</div>')
       + '<div class="dq-empty">効果は未生成です（次回バッチで付与）</div>';
     return wrap;
   }
   const li = arr => (arr || []).map(x => '<li>' + esc(x) + '</li>').join('');
-  let h = '<div class="dq-hd">🎮 クエスト効果</div>';
+  let h = ('<div class="dq-hd">' + shukiIcon('gamepad') + ' クエスト効果</div>');
   h += '<div class="dq-pills">'
     + '<span class="dq-pill">難易度 ' + starStr(q.difficulty) + '</span>'
     + '<span class="dq-pill">体力 ' + esc(q.stamina || '?') + '</span>'
@@ -1764,9 +1375,9 @@ function questBlock(q) {
     + '</div>';
   h += '<div class="dq-terms"><span>即効性: <b>' + esc(dv(q.short_term) || '?') + '</b></span>'
     + '<span>長期効果: <b>' + esc(dv(q.long_term) || '?') + '</b></span></div>';
-  if (q.value_note) h += '<div class="dq-value">💡 ' + esc(q.value_note) + '</div>';
+  if (q.value_note) h += ('<div class="dq-value">' + shukiIcon('bulb') + ' ') + esc(q.value_note) + '</div>';
   if (q.concepts && q.concepts.length)
-    h += '<div class="dq-concepts">🎯 成長: ' + q.concepts.map(c => '<span class="cchip">' + esc(c) + '</span>').join('') + '</div>';
+    h += ('<div class="dq-concepts">' + shukiIcon('target') + ' 成長: ') + q.concepts.map(c => '<span class="cchip">' + esc(c) + '</span>').join('') + '</div>';
   wrap.innerHTML = h;
   return wrap;
 }
@@ -1801,7 +1412,7 @@ function showDetail(tid) {
     badges.appendChild(b);
   };
   mkBadge(t.status || '?', 's-' + (t.status || ''));
-  if (t.pending)  mkBadge('⏳ 次便で反映', 'pend');
+  if (t.pending)  mkBadge((shukiIcon('hourglass') + ' 次便で反映'), 'pend');
   if (t.area)     mkBadge(dv(t.area));
   if (t.priority) mkBadge(priLabel(t.priority), 'p-' + t.priority);
 
@@ -1816,6 +1427,11 @@ function showDetail(tid) {
     fields.appendChild(d);
   };
 
+  const lane = LANE_DEFS.find(d => d.key === responsibilityKey(t));
+  field('責任分担', lane.label + (t.human_only ? ' · ' + BOARD_LABEL.manual : ''));
+  field('担当の理由', t.ai_reason || lane.title);
+  field('進め方', t.ai_runner === 'dispatch' ? BOARD_LABEL.scheduled : t.ai_runner === 'session' ? BOARD_LABEL.conversation : null);
+  if (t.ai_pending) field('反映状況', (shukiIcon('hourglass') + ' 次便で反映'));
   fields.appendChild(questBlock(t.quest));
 
   field('締切', t.due);
@@ -1838,7 +1454,7 @@ function showDetail(tid) {
   const isF = (t.id === FOCUS);
   fwrap.innerHTML = '<div class="dp-lbl">フォーカス</div>'
     + '<div class="st-btns"><button class="act-btn st-btn' + (isF ? ' ok' : '') + '" data-focus="'
-    + esc(t.id) + '">' + (isF ? '🎯 解除する' : '🎯 今はこれ') + '</button></div>';
+    + esc(t.id) + '">' + (isF ? (shukiIcon('target') + ' 解除する') : (shukiIcon('target') + ' 今はこれ')) + '</button></div>';
   fields.appendChild(fwrap);
 
   if (t.parent && MAP[t.parent])
@@ -1911,11 +1527,11 @@ async function changeStatus(tid, newStatus, isUndo) {
   const payload = {
     task_path: t.path, task_title: t.title,
     old_status: prevStatus, new_status: newStatus,
-    date: todayStr(),   // UTCではなくローカル日付（→ 📚教訓集 2026-08-06）
+    date: todayStr(),   // UTCではなくローカル日付（→ ' + shukiIcon('book') + '教訓集 2026-08-06）
     time: timeStr(),    // HH:MM（先延ばし実験・時刻粒度のトラッキング用。2026-08-18）
   };
   try {
-    const r = await fetch('/queue', {
+    const r = await fetch(')/queue', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: 'task_status_change', payload }),
@@ -1981,7 +1597,11 @@ document.getElementById('detail-panel').addEventListener('click', e => {
   const b = e.target.closest('[data-change-to]');
   if (b) changeStatus(b.getAttribute('data-task-id'), b.getAttribute('data-change-to'));
 });
+document.getElementById('wall-container').addEventListener('change', e => {
+  if (e.target.matches('[data-select-task]')) toggleLaneSel(e.target);
+});
 document.getElementById('wall-container').addEventListener('click', e => {
+  if (e.target.closest('.task-select')) return;
   const c = e.target.closest('[data-goto]');
   if (c) showDetail(c.getAttribute('data-goto'));
 });
@@ -2017,6 +1637,24 @@ def _data_label_json():
     return json.dumps(out, ensure_ascii=False)
 
 
+def _board_labels_json():
+    labels = {
+        "hint": "タイトルで詳細、チェックでまとめて操作。", "advanced": "詳細設定・保存済みビュー",
+        "viewFilters": "表示・絞り込み", "activeFilters": "有効な条件",
+        "more": "すべて表示", "fewer": "折りたたむ", "completed": "完了したタスク",
+        "highPriority": "高優先", "done": "完了", "todo": "未着手", "inProgress": "進行中", "onHold": "保留", "cancelled": "キャンセル済み",
+        "count": "件", "queued": "件を予約。次便で反映します", "failed": "件は失敗しました",
+        "starts": "開始待ち", "manual": "手動指定", "pending": "⏳ 次便で反映", "noProject": "束ね元なし",
+        "ai": "AIで完了まで", "prep": "AIは準備まで", "human": "自分でやる",
+        "scheduled": "自動便で実行", "conversation": "対話で進める",
+        "aiHint": "AIが完了まで進められる仕事。自動便か対話かは各タスクの詳細で確認できます。",
+        "prepHint": "AIが調査や準備を進めます。お金・健康・外部送信の最終判断はあなたが行います。",
+        "humanHint": "自分で行う仕事。手動指定を解除しても、AIができる範囲の判定は残ります。",
+        "confirmComplete": "%n件を完了に変更予約します。よろしいですか？",
+    }
+    return json.dumps({key: t(value, "board") for key, value in labels.items()}, ensure_ascii=False)
+
+
 def render_board_html():
     # PAGE は完全な静的テンプレート（タスクは /board/data から JS が取りに行く）＝
     # vault のデータが混ざる前なので tt() をページ全体にかけてよい（shuki_i18n の前提条件）。
@@ -2026,6 +1664,9 @@ def render_board_html():
     # DATA_LABEL は tt() の**後**に差し込む（先に入れるとキー側の日本語まで訳されて
     # データ値の引き当てが壊れる＝dashboard_visualize の <!--VIZ_OPTIONS--> と同じ理由）。
     page = shuki_i18n.tt_html(PAGE, ctx="board").replace("__DATA_LABEL_JSON__", _data_label_json())
+    page = page.replace("__BOARD_LABEL_JSON__", _board_labels_json())
+    page = page.replace('label="その他のグループ分け"',
+                        'label="' + html.escape(t("その他のグループ分け", "board"), quote=True) + '"')
     # 🔄 再読み込みボタンは page_header() が共通で出すため、ここでは持たない（2026-09-27〜）。
     return dashboard_ui.hydrate_shell(
         page, "board",

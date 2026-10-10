@@ -31,7 +31,7 @@ PAGE = """<!DOCTYPE html>
 <html lang="ja"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 """ + dashboard_ui.pwa_head() + dashboard_chat.assets_head() + """
-<title>📅 カレンダー</title>
+<title> カレンダー</title>
 <link rel="stylesheet" href="/english/style.css">
 <script src="/english/routine.js"></script>
 <style>
@@ -209,7 +209,7 @@ PAGE = """<!DOCTYPE html>
     z-index:60; display:flex; align-items:center; justify-content:center; }
   .cal-fab:hover { transform:scale(1.05); }
   .cal-modal-backdrop { position:fixed; inset:0; background:color-mix(in srgb, black 55%, transparent);
-    display:none; align-items:center; justify-content:center; z-index:70; padding:16px; }
+    display:none; align-items:center; justify-content:center; z-index:1400; padding:16px; }
   .cal-modal-backdrop.open { display:flex; }
   .cal-modal { background:var(--card); border:1px solid var(--line); border-radius:18px; padding:22px;
     width:min(94vw,420px); display:flex; flex-direction:column; gap:12px; max-height:88vh; overflow:auto;
@@ -378,7 +378,7 @@ PAGE = """<!DOCTYPE html>
       + '<div class="cal-event-head" data-toggle>'
       + '<span class="cal-event-time">' + escHtml(ev.time_label) + '</span>'
       + '<span class="cal-event-summary">' + escHtml(ev.summary || '（無題の予定）') + '</span>'
-      + (notes.length ? '<span class="cal-event-note-count">📝' + notes.length + '</span>' : '')
+      + (notes.length ? ('<span class="cal-event-note-count">' + shukiIcon('pencil')) + notes.length + '</span>' : '')
       + '</div>'
       + (ev.location ? '<div class="cal-event-loc">' + escHtml(ev.location) + '</div>' : '')
       + (notesHtml ? '<div class="cal-event-notes">' + notesHtml + '</div>' : '')
@@ -394,7 +394,7 @@ PAGE = """<!DOCTYPE html>
 
   function suggestionHtml(day, s) {
     return '<article class="cal-suggest" data-path="' + escHtml(s.path) + '" data-date="' + escHtml(day.date) + '">'
-      + '<div class="cal-suggest-head">✨ <span>' + escHtml(s.title) + '</span>'
+      + ('<div class="cal-suggest-head">' + shukiIcon('sparkle') + ' <span>') + escHtml(s.title) + '</span>'
       + (s.area ? '<span class="cal-suggest-area">' + escHtml(s.area) + '</span>' : '') + '</div>'
       + '<div class="cal-suggest-reason">' + escHtml(s.reason) + (s.due ? '（期限 ' + escHtml(s.due) + '）' : '') + '</div>'
       + '<div class="cal-suggest-actions">'

@@ -243,6 +243,16 @@ class VoiceConversation {
     if (['no', 'nothanks', 'notnow', 'cancel', 'いいえ', '今はいい', 'やめて', 'キャンセル'].includes(compact)) return 'no';
     return '';
   }
+  // 「キャッチアップしたい」等で音声会話から対話型ブリーフィング（catchup スキル）へ移る（2026-10-08）。
+  // 音声会話はシェルを持たないので、記録までできる通常の対話（自動読み上げON）に切り替える。
+  // 「何があった」は単独の発話の時だけ（「その時何があった？」のような会話中の質問は拾わない）。
+  isCatchupRequest(text) {
+    const raw = String(text || '');
+    if (/キャッチアップ|catch\s*-?\s*up/i.test(raw)) return true;
+    const compact = raw.replace(/[\s。！？!?、,，．.]+/g, '');
+    return /^(?:最近|今日|昨日から|前回から|留守の間)?(?:何|なに)があった(?:の|か)?$/.test(compact)
+      || /^(?:最新情報|近況|ニュース)(?:を)?(?:教えて|聞かせて)(?:ください)?$/.test(compact);
+  }
   detectWorkCommand(text) {
     const compact = this.normalizeWorkCommand(text);
     const startPatterns = [
@@ -369,6 +379,13 @@ class VoiceConversation {
             : 'Stop could not be confirmed. Check the work card.');
           return;
         }
+      }
+      if (!this.speakingPractice && !lookupSource && !this.proposal && this.ui.catchup
+          && this.isCatchupRequest(text)) {
+        completed = true;
+        this.ui.render(reply, language === 'ja' ? 'キャッチアップに切り替えます。' : 'Switching to the catch-up.');
+        this.ui.catchup();
+        return;
       }
       let workCommand = this.speakingPractice ? '' : this.detectWorkCommand(text);
       const shortApproval = !this.speakingPractice && this.confirmation(text) === 'yes';

@@ -52,7 +52,6 @@ _CONFIG_FILE = (_SECRETS_DIR / "shuki_paths.json") if (_SECRETS_DIR / "shuki_pat
 # 実際の環境の値は各自 shuki_paths.json に書く（shuki_paths.example.json がテンプレート）。
 _DEFAULTS = {
     "vault": r"C:\path\to\your\Obsidian_Vault",
-    "radio_dir": r"C:\path\to\your\Radio",
     "message_base": r"C:\path\to\your\workspace",
     "code_cli": "",
     "stt_venv_python": "",
@@ -266,7 +265,6 @@ def secret_file(name):
 
 
 VAULT = get_path("vault")
-RADIO_DIR = get_path("radio_dir")
 MESSAGE_BASE = get_path("message_base")
 CODE_CLI = get_path("code_cli")
 STT_VENV_PYTHON = get_path("stt_venv_python")

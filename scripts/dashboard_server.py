@@ -56,7 +56,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import shuki_paths        # noqa: E402  (VAULT/RADIO_DIR 等の絶対パス単一情報源。公開版はshuki_paths.jsonで差し替え)
+import shuki_paths        # noqa: E402  (VAULT 等の絶対パス単一情報源。公開版はshuki_paths.jsonで差し替え)
 import shuki_core  # noqa: E402
 from shuki_core import vault as core_vault  # noqa: E402
 import dashboard_settings  # noqa: E402
@@ -87,6 +87,7 @@ import dashboard_auto_model  # noqa: E402  (チャット・音声の決定的な
 # 候補に私的な抜粋が入るので、サーバーと同じ端末のブラウザからだけ受け付ける)
 import dashboard_theme    # noqa: E402  (デザイントークン単一情報源。GET /theme.css)
 import dashboard_sfx      # noqa: E402  (操作フィードバックSE単一情報源。GET /sfx.js)
+import dashboard_tutorial  # noqa: E402  (初回チュートリアルと画面ガイド。GET /tutorial.js・/tutorial/state)
 if shuki_core.feature_enabled("decisions"):
     import decisions          # noqa: E402  (⚖️ 決裁ストア 99_System/decisions/open.json。2026-07-31 分離)
 if shuki_core.feature_enabled("decisions"):
@@ -138,7 +139,9 @@ NEWS_FEEDBACK = news_store.LEGACY_DIR / "feedback.json"  # 旧ファイル（DB�
 NEWS_FEEDBACK_VALUES = ("good", "bad", "skip")
 _FEEDBACK_LOCK = threading.Lock()
 
-HOST, PORT = "0.0.0.0", 8765
+# 2026-10-10: このPCだけで待ち受ける。スマホは Tailscale Serve（https → 127.0.0.1:8765）経由。
+# 0.0.0.0 だと LAN の誰でも /exec（権限スキップの Claude 起動）に届いていた。
+HOST, PORT = shuki_paths.get_value("dashboard_host", "127.0.0.1"), 8765
 
 # ── 🩺 生死ログ（2026-09-14 追加） ──
 # サーバーが無警告で突然落ちる現象（Windowsイベントログにもクラッシュ記録が残らない）の原因究明用。
@@ -276,6 +279,12 @@ NTFY_CHOICE_RE = re.compile(
     r"^[ \t>`*＿_]*NTFY_CHOICES[：:]\s*(.+?)\s*[`*_]*[ \t]*$",
     re.MULTILINE,
 )
+# 判断が複数ある時は観点ごとに1行（2026-10-08）。「観点|選択肢1|選択肢2…」で、先頭が観点名。
+NTFY_QUESTION_RE = re.compile(
+    r"^[ \t>`*＿_]*NTFY_QUESTION[：:]\s*(.+?)\s*[`*_]*[ \t]*$",
+    re.MULTILINE,
+)
+CHOICE_QUESTIONS_MAX, CHOICE_OPTIONS_MAX = 4, 4
 _DASHBOARD_REPLY_STYLE = (
     "For all written SHUKI dashboard replies, respond in English and keep the response concise. "
     "Lead with the outcome in one sentence. For work reports, use only the applicable short sections "
@@ -291,11 +300,14 @@ _DASHBOARD_REPLY_STYLE = (
     "a generated image, or citing where information came from) — not as decoration on every reply. "
 )
 _NTFY_SYSTEM_PROMPT_BASE = _DASHBOARD_REPLY_STYLE + (
-    "回答の最後に、ユーザーに確認や選択を求める内容がある場合のみ、次の形式で1行だけ追加すること: "
-    "NTFY_CHOICES: 選択肢1|選択肢2|選択肢3 （2〜3個・日本語可・パイプ区切り）。"
-    "はい/いいえで答えられる問いなら選択肢も短くすること（合計10文字以内だと通知のボタンに"
-    "そのまま文言が出て、本文を削らずに済む）。"
-    "確認や選択が不要な通常の回答では絶対にこの行を書かないこと。"
+    "回答の最後に、ユーザーに確認や選択を求める内容がある場合のみ、選択肢の行を追加すること。"
+    "判断が1つだけなら、次の形式で1行だけ: NTFY_CHOICES: 選択肢1|選択肢2|選択肢3 （2〜3個・日本語可・パイプ区切り）。"
+    "互いに独立した判断が2つ以上ある時は、NTFY_CHOICES を使わず、判断ごとに1行ずつ次の形式で書くこと"
+    "（最大4行・各行の選択肢は2〜4個）: NTFY_QUESTION: 観点（短く）|選択肢1|選択肢2|選択肢3 。"
+    "ユーザーは観点ごとに1つ選ぶか自由記述で答え、全観点の答えが1通にまとめて届く。"
+    "選択肢は互いに排他的にすること。選択肢の文字数に制限はないので、判断に必要な説明は選択肢の文言に含めてよい。"
+    "おすすめがあれば先頭に置き、末尾に（推奨）と付けてよい。"
+    "確認や選択が不要な通常の回答では絶対にこれらの行を書かないこと。"
 )
 
 
@@ -404,11 +416,23 @@ def _strip_turn_wrappers(text):
 
 
 def extract_ntfy_choices(text):
-    """回答中の NTFY_CHOICES 行を検出し、本文と選択肢を返す。
+    """回答中の選択肢行を検出し、(本文, 選択肢) を返す。選択肢行が無ければ (text, None)。
 
+    - 判断が1つ：NTFY_CHOICES 行 → ["選択肢1", ...]（従来どおり文字列のリスト）
+    - 判断が複数：NTFY_QUESTION 行（観点|選択肢…）→ [{"label": 観点, "options": [...]}, ...]
+      （2026-10-08。観点ごとに選んでまとめて返信する対話パネルの複数問UI用）
+    NTFY_QUESTION があればそちらを優先し、紛れ込んだ NTFY_CHOICES 行も本文から除く。
     通常は回答末尾だが、Codex が行の後に短い締めを足す場合もあるため、
     最後に現れた選択肢行を採用し、その行だけを本文から除く。
     """
+    questions = []
+    for qm in NTFY_QUESTION_RE.finditer(text or ""):
+        parts = [c.strip() for c in qm.group(1).split("|") if c.strip()]
+        if len(parts) >= 3:  # 観点＋選択肢2つ以上
+            questions.append({"label": parts[0], "options": parts[1:1 + CHOICE_OPTIONS_MAX]})
+    if questions:
+        clean = NTFY_CHOICE_RE.sub("", NTFY_QUESTION_RE.sub("", text))
+        return re.sub(r"\n{3,}", "\n\n", clean).strip(), questions[:CHOICE_QUESTIONS_MAX]
     matches = list(NTFY_CHOICE_RE.finditer(text or ""))
     m = matches[-1] if matches else None
     if not m:
@@ -665,6 +689,7 @@ EXEC_ONLY_SKILLS = {
     "task-exec",  # タスクカード「一手」＝渡された1件を方針すり合わせ→代行実行で完了へ進める（選定はしない）
     "discuss",    # タスクカードが手詰まり判定で「💬 壁打ち」に切り替わる時（SKILL_GROUPS にもある）
     "research",   # 対話ドックのスキル一覧「調査」＝トピックを渡して論文・文献調査を起動
+    "catchup",    # 対話ドック「キャッチアップ」・音声会話からの切り替え（2026-10-08）
 }
 # /exec で許可するスキル名（ボタン一覧＋上記から収集。素通しにせず typo・不正値を弾く）
 ALL_SKILL_NAMES = ({s for _, _, s, _ in PRIMARY_SKILLS if s} |
@@ -1911,7 +1936,7 @@ def collect_review_items(include_task_updates=True, notifications_only=True):
                 "id": shuki_paths.vault_rel(f, VAULT),
                 "kind": "ledger",
                 "source": d.get("source", "agent"),
-                "emoji": d.get("emoji", "🤖"),
+                "emoji": dashboard_icons.legacy_ui_icon_svg(d.get("icon") or d.get("emoji")),
                 "label": d.get("kind", "AI報告"),
                 "title": d.get("title", f.stem),
                 "path": ledger_path,  # 参照先 .md（あれば /files/preview 可能）
@@ -3196,7 +3221,12 @@ def load_transcript(session_id, limit=200):
                 role = d.get("type")
                 if role not in ("user", "assistant"):
                     continue
-                text = _extract_text((d.get("message") or {}).get("content"))
+                content = (d.get("message") or {}).get("content")
+                # A text accompanying a tool call is not the completed reply.
+                if role == "assistant" and isinstance(content, list) and any(
+                        isinstance(block, dict) and block.get("type") == "tool_use" for block in content):
+                    continue
+                text = _extract_text(content)
                 if text:
                     msgs.append({"role": role, "text": _strip_turn_wrappers(text)})
     except Exception:
@@ -3257,6 +3287,8 @@ def load_codex_transcript(thread_id, limit=200):
                     continue
                 role = payload.get("role")
                 if role not in ("user", "assistant"):
+                    continue
+                if role == "assistant" and payload.get("channel") not in (None, "final"):
                     continue
                 text = "\n".join(
                     c.get("text", "") for c in (payload.get("content") or [])
@@ -3552,7 +3584,7 @@ def job_outcome(status, choices=None):
     return "unknown"
 
 
-OUTCOME_LABEL = {"ok": "✅ 完了", "review": "👀 要レビュー", "incomplete": "⚠️ 未完", "unknown": "",
+OUTCOME_LABEL = {"ok": "完了", "review": "要レビュー", "incomplete": "未完", "unknown": "",
                  "running": "Running"}
 
 
@@ -3687,6 +3719,9 @@ def _stream_apply(job, msg):
     生の thinking 本文は job['thinking'] に別途蓄積し、対話パネルが完了時に
     折りたたみ表示として保持する（2026-08-16、以前は破棄していた）。
     """
+    if msg.get("type") == "system" and msg.get("subtype") == "init" and msg.get("session_id"):
+        with JOB_LOCK:
+            job["session"] = msg["session_id"]
     if msg.get("type") != "assistant":
         return
     for block in (msg.get("message") or {}).get("content") or []:
@@ -3852,7 +3887,7 @@ def _codex_prompt(job, context="", model_spec=None):
         f"この行は SHUKI ダッシュボードが選択肢ボタンを描画するために使う。"
         f"選択肢を出す時は本文に番号付きの箇条書きを書いて済ませるのではなく、"
         f"本文の後に必ずこの1行を添えること。CodexでもClaudeと同じく、"
-        f"確認・選択を求める回答には必ずNTFY_CHOICES行を出すこと。")
+        f"確認・選択を求める回答には必ずNTFY_CHOICES行（判断が複数ならNTFY_QUESTION行）を出すこと。")
 
 
 def _execute_codex_job(job):
@@ -3953,8 +3988,9 @@ def _execute_codex_job(job):
                 if job.get('work') and session_in and thread_id != session_in:
                     proc.kill()
                     return 'error', 'Work session changed unexpectedly; execution stopped'
-                if job.get("voice") and thread_id:
-                    job["session"] = thread_id
+                if thread_id:
+                    with JOB_LOCK:
+                        job["session"] = thread_id
             elif mtype == 'item.started' and job.get('work'):
                 kind = (msg.get('item') or {}).get('type')
                 if kind in ('command_execution', 'file_change', 'mcp_tool_call', 'web_search'):
@@ -4799,15 +4835,21 @@ def cleanup_uploads():
         pass
 
 
-def save_upload(filename, data):
-    """添付を UPLOAD_DIR に保存し、保存先 Path を返す。拡張子ホワイトリスト＋名前サニタイズ。"""
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    cleanup_uploads()
+def save_upload(filename, data, folder=None):
+    """添付を保存し、保存先 Path を返す。拡張子ホワイトリスト＋名前サニタイズ。
+
+    既定はチャット用の UPLOAD_DIR（24時間で掃除）。ホームのメモ添付は folder に
+    ui-queue/memo_attachments を渡し、メモと同じく消さずに残す（2026-10-08）。
+    """
+    target = folder or UPLOAD_DIR
+    target.mkdir(parents=True, exist_ok=True)
+    if folder is None:
+        cleanup_uploads()
     safe = re.sub(r"[^\w.\-]", "_", Path(filename or "").name)[:80] or "file"
     ext = Path(safe).suffix.lower()
     if ext not in UPLOAD_ALLOWED_EXT:
         raise ValueError(f"未対応の拡張子です: {ext or '(なし)'}")
-    dest = UPLOAD_DIR / f"{time.strftime('%Y%m%d_%H%M%S')}_{safe}"
+    dest = target / f"{time.strftime('%Y%m%d_%H%M%S')}_{safe}"
     dest.write_bytes(data)
     return dest
 
@@ -4822,10 +4864,10 @@ CC_USAGE_WINDOWS = [  # clc.py の window_labels/window_order・閾値と揃え�
 CC_USAGE_WARN, CC_USAGE_DANGER = 50, 80
 
 
-def fetch_cc_usage_accounts():
+def fetch_cc_usage_accounts(force=False):
     """全アカウントのレート使用量を取得する（アカウントごとに5分キャッシュ）。
     戻り値は {"A": {...}, "B": {...}}。失敗したアカウントは {"error": "..."}（直近成功データがあればそれを返す）。"""
-    return claude_accounts.usage_all()
+    return claude_accounts.usage_all(force=force)
 
 
 def fetch_cc_usage(account_key=None):
@@ -4836,20 +4878,167 @@ def fetch_cc_usage(account_key=None):
 
 
 def accounts_band_html():
-    """Claude/Codex使用量パネル（GET /usage-accounts の値をフロントJSが埋める）。"""
+    """Claude/Codex使用量パネル（GET /usage-accounts の値をフロントJSが埋める）。
+
+    2026-10-08 にホームからサイドバーへ移した（ホームを書く画面に絞ったため）。全ページの
+    サイドバーに載るので、値は対話ドックが取得済みの window.shukiUsageAccounts を使い回す。
+    ログイン切れが近いアカウントがあれば、サイドバーを開かなくてもトリガーが赤くなる。
+    """
     cards = "".join(
         f'<div class="acc-card" data-account="{a["key"]}"><div class="acc-head">'
-        f'{dashboard_icons.nav_icon_svg("progress", 13)} {a["key"]}・{html.escape(a["label"])}</div>'
-        f'<div class="acc-body muted">{_t("読み込み中…", ctx="home")}</div></div>'
+        f'{dashboard_icons.nav_icon_svg("progress", 13)} '
+        f'<span class="acc-name" title="{html.escape(a["key"] + "・" + a["label"])}">'
+        f'{html.escape(a["key"])}・{html.escape(a["label"])}</span></div>'
+        f'<div class="acc-body">{_t("読み込み中…", ctx="home")}</div></div>'
         for a in claude_accounts.ACCOUNTS if a["kind"] == "claude"
     )
     if claude_accounts.codex_account():
         cards += (
             '<div class="acc-card" data-account="codex"><div class="acc-head">'
             f'{dashboard_icons.nav_icon_svg("progress", 13)} Codex</div>'
-            f'<div class="acc-body muted">{_t("読み込み中…", ctx="home")}</div></div>'
+            f'<div class="acc-body">{_t("読み込み中…", ctx="home")}</div></div>'
         )
-    return f'<div class="accounts-band" id="accounts-band">{cards}</div>'
+    windows = [(key, _t(label, ctx="home")) for key, label in CC_USAGE_WINDOWS]
+    labels = {k: _t(v, ctx=c) for k, v, c in (
+        ("expired", "ログイン切れ", None), ("left", "あと", None), ("days", "日でログイン切れ", None),
+        ("failed", "取得失敗", None), ("retry", "再試行", None), ("none", "データなし", "home"),
+        ("h5", "5時間", "home"), ("week", "週次", "home"), ("resets", "リセット権", "home"),
+        ("times", "回", "home"), ("credits", "残クレジット", "home"),
+        ("used", "使用済み", "home"), ("stale", "前回の値", "home"),
+        ("updated", "最終取得", "home"), ("reset", "リセットまで", "home"),
+        ("refresh", "更新", "button"), ("usage", "使用量・クレジット", "home"),
+        ("refresh_hint", "5分ごとに自動更新。手動取得は最短1分間隔。", "home"))}
+    cfg = json.dumps({"windows": windows, "warn": CC_USAGE_WARN, "danger": CC_USAGE_DANGER, "t": labels},
+                     ensure_ascii=False).replace("</", "<\\/")
+    return (f'<section class="sb-accounts" id="accounts-band" aria-label="{html.escape(labels["usage"])}">'
+            f'<div class="acc-toolbar"><span>{html.escape(labels["usage"])}</span>'
+            f'<button type="button" id="acc-refresh" class="acc-retry" '
+            f'title="{html.escape(labels["refresh_hint"])}">'
+            f'{dashboard_icons.ui_icon_svg("refresh", 14)} {html.escape(labels["refresh"])}</button></div>'
+            '<div id="acc-status" class="acc-status" role="status" aria-live="polite"></div>'
+            f'{cards}</section>'
+            f'<script>var SHUKI_ACC = {cfg};</script>' + _ACCOUNTS_JS)
+
+
+_ACCOUNTS_JS = """<script>
+(function() {
+  var C = SHUKI_ACC, T = C.t, loading = false, lastCheck = 0, autoPaused = false, autoTimer;
+  var band = document.getElementById('accounts-band');
+  if (!band) return;
+  var refresh = document.getElementById('acc-refresh'), status = document.getElementById('acc-status');
+  function esc(value) {
+    var span = document.createElement('span');
+    span.textContent = String(value);
+    return span.innerHTML;
+  }
+  function fmtResetIn(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    if (isNaN(d)) return '';
+    var min = Math.max(0, Math.round((d - new Date()) / 60000));
+    var days = Math.floor(min / 1440); min -= days * 1440;
+    var hours = Math.floor(min / 60); min -= hours * 60;
+    var s = '';
+    if (days) s += days + 'd ';
+    if (days || hours) s += hours + 'h';
+    if (!days) s += String(min).padStart(2, '0') + 'm';
+    return s;
+  }
+  function refreshWarnHtml(data) {
+    // refreshToken の残り寿命が7日以内なら警告（切れると自動更新不可＝そのアカウントが
+    // 完全に使えなくなる。2026-08-28 .claude-b で実際に踏んだ事故の再発防止）。
+    if (!data || !data.refresh_expires_at) return '';
+    var days = Math.floor((new Date(data.refresh_expires_at) - new Date()) / 86400000);
+    if (days > 7) return '';
+    return '<div class="acc-refresh-warn">' + shukiIcon('warn') + ' ' + (days <= 0 ? T.expired : T.left + days + T.days) + '</div>';
+  }
+  function showError(card, data) {
+    var body = card.querySelector('.acc-body');
+    if (!data || !data.fetched_at) body.innerHTML = refreshWarnHtml(data);
+    var previous = body.querySelector('.acc-error');
+    if (previous) previous.remove();
+    var error = document.createElement('span');
+    error.className = 'acc-error';
+    error.textContent = (data && data.fetched_at ? T.stale + ' · ' : '') + T.failed;
+    error.title = data && data.error ? data.error : T.none;
+    body.append(error);
+  }
+  function render(d) {
+    var warned = false, failed = false, fetched = [];
+    band.querySelectorAll('.acc-card').forEach(function(card) {
+      var data = d[card.dataset.account];
+      if (refreshWarnHtml(data)) warned = true;
+      if (!data || data.error) failed = true;
+      if (!data || (data.error && !data.fetched_at)) { showError(card, data); return; }
+      if (data.fetched_at) {
+        fetched.push(data.fetched_at);
+        card.querySelector('.acc-head').title = T.updated + ' ' + new Date(data.fetched_at * 1000).toLocaleString();
+      }
+      var windows = card.dataset.account === 'codex' ? [['five_hour', T.h5], ['seven_day', T.week]] : C.windows;
+      var rows = windows.map(function(p) {
+        var w = data[p[0]];
+        if (!w || w.utilization == null) return '';
+        var u = Number(w.utilization);
+        if (!Number.isFinite(u)) return '';
+        var cls = u >= C.danger ? 'danger' : (u >= C.warn ? 'warn' : '');
+        var reset = fmtResetIn(w.resets_at);
+        return '<div class="acc-row"><span class="acc-wlabel" title="' + esc(p[1]) + '">' + esc(p[1]) + '</span>'
+          + '<span class="u-chip' + (cls ? ' ' + cls : '') + '"><span class="u-dot"></span>' + u.toFixed(0) + '% ' + T.used + '</span>'
+          + '<span class="acc-reset" title="' + T.reset + ' ' + reset + '">' + reset + '</span></div>';
+      }).join('');
+      var codexMeta = card.dataset.account === 'codex'
+        ? '<div class="acc-meta"><span>' + T.resets + ': ' + esc(data.available_resets ?? '—') + '</span>'
+          + '<span>' + T.credits + ': ' + esc(data.credits && data.credits.unlimited ? '∞' : (data.credits && data.credits.balance != null ? data.credits.balance : '—')) + '</span></div>'
+        : '';
+      card.querySelector('.acc-body').innerHTML = refreshWarnHtml(data) + (rows + codexMeta || '<span class="muted">' + T.none + '</span>');
+      if (data.error) showError(card, data);
+    });
+    autoPaused = failed;
+    status.textContent = (failed ? T.failed + ' · ' + T.retry + ' / ' + T.refresh : '')
+      + (fetched.length ? (failed ? ' · ' : '') + T.updated + ' ' + new Date(Math.min.apply(null, fetched) * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '');
+    var trigger = document.getElementById('sb-trigger');
+    if (trigger) trigger.classList.toggle('sb-warn', warned);
+    window.dispatchEvent(new CustomEvent('shuki:usage-updated', {detail:d}));
+  }
+  function load(fresh, initial) {
+    if (!band || loading) return;
+    loading = true;
+    refresh.disabled = true;
+    band.setAttribute('aria-busy', 'true');
+    var p = (initial && window.shukiUsageAccounts) || fetch('/usage-accounts' + (fresh ? '?refresh=1' : ''), {cache:'no-store'}).then(function(r) {
+      return r.json().then(function(d) { if (!r.ok) throw new Error((d && d.error) || 'HTTP ' + r.status); return d; });
+    });
+    window.shukiUsageAccounts = p;
+    p.then(render).catch(function(error) {
+      autoPaused = true;
+      status.textContent = T.failed + ' · ' + T.retry + ' / ' + T.refresh;
+      band.querySelectorAll('.acc-card').forEach(function(card) {
+        showError(card, {error:error && error.message, fetched_at:card.querySelector('.acc-head').title ? 1 : null});
+      });
+    }).finally(function() {
+      loading = false; lastCheck = Date.now(); refresh.disabled = false;
+      band.setAttribute('aria-busy', 'false');
+      clearTimeout(autoTimer);
+      if (!autoPaused) autoTimer = setTimeout(autoRefresh, 300000);
+    });
+  }
+  refresh.addEventListener('click', function() { load(true); });
+  function autoRefresh() {
+    var sidebar = document.getElementById('sb-panel');
+    if (!autoPaused && !document.hidden && sidebar && sidebar.classList.contains('on')
+        && Date.now() - lastCheck >= 300000) load(false);
+  }
+  document.addEventListener('visibilitychange', autoRefresh);
+  var sidebar = document.getElementById('sb-panel');
+  if (sidebar) new MutationObserver(autoRefresh).observe(sidebar, {attributes:true, attributeFilter:['class']});
+  // ドックのスクリプトはこの後ろで読まれるので、ページ読み込み完了後に共有の取得結果を使う
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function() { load(false, true); });
+  else load(false, true);
+})();
+</script>"""
+
+
+dashboard_ui.set_sidebar_extra_getter(accounts_band_html)
 
 
 # ── HTML 生成 ────────────────────────────────────────────
@@ -4872,6 +5061,7 @@ def chat_skill_catalog():
     """Reuse launcher metadata for the dock; offer only installed, public skills."""
     items = []
     groups = [("今日", [("play", "次の一手", "next", "今やるタスクを1つ選ぶ"),
+                        ("sunrise", "キャッチアップ", "catchup", "決裁・AIの進捗・ニュースを対話で聞く"),
                         ("microscope", "調査", "research", "テーマについて論文・文献を調べる")])]
     groups.extend((name, skills) for (_, name), skills in SKILL_GROUPS)
     for category, skills in groups:
@@ -5100,12 +5290,7 @@ def focus_band_html(n_overdue, n_due_today, log_written, n_reviews, n_dec, rec=N
 # ── CSS（ホーム/設定ページ）── デザイントークンは /theme.css（dashboard_theme.py）が単一の正。
 # ここでは var(--xxx) 参照のみで組み立てる（2026-07-28 まで {P['xxx']} の直接埋め込みだった。
 # f-string の {{ }} エスケープが不要になり、CSS が素の文字列として読める）。
-HOME_CSS = """
-  * { box-sizing: border-box; margin: 0; }
-  body { background:var(--bg); color:var(--fg); font-family:var(--font-ui); padding:16px 20px;
-    --page-pad-x:20px; --page-pad-y:16px;
-    background-image: radial-gradient(ellipse 80% 40% at 50% -10%, color-mix(in srgb, var(--accent) 8%, transparent) 0%, transparent 60%),
-      radial-gradient(ellipse 60% 30% at 85% 110%, color-mix(in srgb, var(--accent) 5%, transparent) 0%, transparent 60%); min-height:100vh; }
+SUM_BAND_CSS = """
   /* ── 🧭 各ページの更新（1行サマリ帯）── ホームに出ていない7ページの「何が変わったか」だけを
      持つ。色はアイコンが持ち、カードの縁は全周とも var(--line)（一辺だけ塗らない）。 */
   .sum-band { margin-bottom:14px; }
@@ -5125,6 +5310,15 @@ HOME_CSS = """
   .sum-val.up { color:var(--teal); }
   .sum-val.down { color:var(--red); }
   .sum-sub { font-size:.68rem; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+"""
+
+HOME_CSS = """
+  * { box-sizing: border-box; margin: 0; }
+  body { background:var(--bg); color:var(--fg); font-family:var(--font-ui); padding:16px 20px;
+    --page-pad-x:20px; --page-pad-y:16px;
+    background-image: radial-gradient(ellipse 80% 40% at 50% -10%, color-mix(in srgb, var(--accent) 8%, transparent) 0%, transparent 60%),
+      radial-gradient(ellipse 60% 30% at 85% 110%, color-mix(in srgb, var(--accent) 5%, transparent) 0%, transparent 60%); min-height:100vh; }
+""" + SUM_BAND_CSS + """
   .ach-band { display:flex; flex-wrap:wrap; align-items:center; gap:6px 22px;
     background:linear-gradient(170deg,var(--card),var(--bg) 75%); border:1px solid var(--line);
     border-radius:12px; padding:12px 18px; margin-bottom:14px;
@@ -5219,11 +5413,6 @@ HOME_CSS = """
   .standup table { border-collapse:collapse; margin:8px 0; font-size:.8rem; max-width:100%; }
   .standup th, .standup td { border:1px solid var(--line); padding:4px 8px; text-align:left; }
   .standup th { color:var(--accent); }
-  .bf-radio { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:14px;
-    padding:8px 10px; border:1px solid var(--line); border-radius:10px; background:var(--bg); }
-  .bf-radio-l { font-size:.78rem; color:var(--muted); white-space:nowrap;
-    display:inline-flex; align-items:center; gap:4px; }
-  .bf-radio audio { height:32px; flex:1; min-width:200px; }
   .bf-sec { margin-bottom:16px; }
   .bf-sec h3 { font-size:.86rem; margin:0 0 6px; color:var(--accent); }
   /* 読み物（散文）は行間広め・幅を抑えて読みやすく */
@@ -5272,28 +5461,6 @@ HOME_CSS = """
   .hist-box summary:hover { color:var(--fg); }
   .exec-btn.busy { opacity:.45; pointer-events:none; }
   .model-note svg { vertical-align:-3px; margin:0 1px; }
-  .u-chip { border:1px solid var(--line); border-radius:20px; padding:2px 10px; color:var(--muted);
-    display:inline-flex; align-items:center; gap:5px; }
-  .u-chip .u-dot { width:7px; height:7px; border-radius:50%; background:var(--teal); flex-shrink:0; }
-  .u-chip.warn .u-dot { background:var(--accent); }
-  .u-chip.warn { color:var(--accent); border-color:color-mix(in srgb, var(--accent) 33%, transparent); }
-  .u-chip.danger .u-dot { background:var(--red); }
-  .u-chip.danger { color:var(--red); border-color:color-mix(in srgb, var(--red) 33%, transparent); }
-  .accounts-band { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:16px; }
-  @media (max-width:640px) { .accounts-band { grid-template-columns:1fr; } }
-  .acc-card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:10px 12px; }
-  .acc-head { display:flex; align-items:center; gap:6px; margin-bottom:8px; font-size:.82rem;
-    color:var(--muted); font-weight:bold; }
-  .acc-body { display:flex; flex-direction:column; gap:5px; }
-  .acc-retry { align-self:flex-start; padding:4px 8px; border:1px solid var(--line); border-radius:6px;
-    background:transparent; color:var(--accent); cursor:pointer; font:inherit; }
-  .acc-retry:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
-  .acc-retry:disabled { opacity:.6; cursor:wait; }
-  .acc-row { display:flex; align-items:center; gap:8px; font-size:.78rem; flex-wrap:wrap; }
-  .acc-wlabel { color:var(--muted); flex:0 0 68px; }
-  .acc-reset { color:var(--muted); font-size:.72rem; }
-  .acc-refresh-warn { color:var(--red); font-size:.78rem; font-weight:bold;
-    background:color-mix(in srgb, var(--red) 12%, transparent); border-radius:8px; padding:4px 8px; }
   .col { display:block; }
   .col > summary.col-head { cursor:pointer; list-style:none; user-select:none; }
   .col > summary.col-head::-webkit-details-marker { display:none; }
@@ -5525,6 +5692,591 @@ def sidebar_badge_counts():
     }
 
 
+HOME_MEMO_MAX_CHARS = 12000  # journal と同じ上限。POST /queue の 64KiB に十分収まる
+
+HOME_LABELS = {  # ホームの JS 文言（render_home_html が訳して HOME_PAGE の __HOME_LABELS__ に埋め込む）
+    "idle": "下書きはこのブラウザに残ります",
+    "idleRepair": "下書きはこのブラウザだけに残ります（サーバーには送りません）",
+    "repairButton": "下書きを残して完了を記録",
+    "repairHeadings": "見出しだけの状態です。自分の言葉を書いてから記録します",
+    "repairDone": "下書きはこのブラウザに残しました。今日の分を記録しました",
+    "empty": "本文が空です",
+    "sendingAi": "AIに渡しています…",
+    "sendingRecord": "記録しています…",
+    "doneAi": "AIに渡しました。次の便で整理します",
+    "doneRecord": "記録しました",
+    "failAi": "AIに渡せませんでした",
+    "failRecord": "記録できませんでした",
+    "wait": "⏳ 次の便で整理",
+    "sorted": "整理済み",
+    "task": "タスク化",
+    "inbox": "保留",
+    "decision": "決裁へ",
+    "rejected": "見送り",
+    "record": "記録",
+    "event": "予定: ",
+    "del": "削除",
+    "uploading": "添付しています…",
+    "attachFailed": "添付できませんでした",
+    "removeAttach": "添付を外す",
+    "attachLine": "添付: ",
+    "back": "戻る",
+    "tplDaily": "今日の振り返り",
+    "tplConversation": "発言と影響の振り返り",
+    "tplImage": "画像生成プロンプト",
+    "replaceConfirm": "入力中の本文をテンプレートで置き換えますか？",
+    "saveTpl": "今の本文をテンプレートとして保存",
+    "tplName": "テンプレートの名前",
+    "tplSaved": "テンプレートを保存しました",
+    "tplSaveFailed": "このブラウザにテンプレートを保存できませんでした",
+    "tplDeleteConfirm": "このテンプレートを削除しますか？",
+    "edit": "編集",
+    "save": "保存",
+    "cancel": "キャンセル",
+    "editFailed": "編集を保存できませんでした",
+    "more": "さらに表示",
+    "confirmDel": "このメモを削除しますか？",
+    "none": "メモは、まだありません",
+    "recent": "最近のメモ",
+    "left": "残り %n 文字",
+    "unsorted": "（未整理 %n）",
+}
+
+HOME_WRITE_CSS = """
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--fg); font-family:var(--font-ui); min-height:100vh; }
+  .hd-top .date { color:var(--muted); font-size:.85rem; margin-left:8px; }
+  .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden;
+    clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+  .hw { max-width:760px; margin:0 auto; padding:20px 16px 32px; display:flex; flex-direction:column; gap:14px; }
+  .hw-form { display:flex; flex-direction:column; gap:10px; }
+  #hw-text { width:100%; min-height:min(52vh, 560px); resize:vertical; background:var(--card); color:var(--fg);
+    border:1px solid var(--line); border-radius:12px; padding:18px 20px; font:inherit; font-size:1.02rem;
+    line-height:1.85; caret-color:var(--accent); }
+  #hw-text::placeholder { color:var(--muted); }
+  /* ＋ボタン（添付・スキル・テンプレート・2026-10-08）: 書く欄の右下に重ねる。本文が隠れないよう下に余白 */
+  .hw-editor-wrap { position:relative; }
+  .hw-editor-wrap #hw-text { padding-bottom:76px; }
+  .hw-plus { position:absolute; right:22px; bottom:18px; width:52px; height:52px; border-radius:50%; border:none;
+    background:var(--accent); color:var(--card); display:inline-flex; align-items:center; justify-content:center;
+    cursor:pointer; box-shadow:0 3px 10px color-mix(in srgb, var(--accent) 35%, transparent); }
+  .hw-plus:hover { filter:brightness(1.08); }
+  .hw-plus[hidden] { display:none; }
+  .hw-plus-menu { position:absolute; right:22px; bottom:80px; z-index:5; width:min(300px, calc(100% - 44px));
+    max-height:50vh; overflow:auto; background:var(--card); border:1px solid var(--line); border-radius:12px;
+    box-shadow:0 8px 24px rgba(0,0,0,.18); padding:6px; }
+  .hw-plus-menu[hidden], .hw-menu-main[hidden], .hw-menu-templates[hidden] { display:none; }
+  .hw-menu-item { display:flex; align-items:center; gap:10px; width:100%; min-height:44px; padding:8px 10px;
+    background:none; border:none; border-radius:8px; color:var(--fg); font:inherit; font-size:.88rem;
+    text-align:left; cursor:pointer; }
+  .hw-menu-item:hover, .hw-menu-item:focus-visible { background:color-mix(in srgb, var(--accent) 10%, transparent); }
+  .hw-menu-item svg { flex-shrink:0; color:var(--accent); }
+  .hw-tpl-row { display:flex; align-items:center; }
+  .hw-tpl-row .hw-menu-item { flex:1; min-width:0; }
+  .hw-tpl-del { min-width:44px; min-height:44px; background:none; border:none; color:var(--muted); cursor:pointer;
+    display:inline-flex; align-items:center; justify-content:center; }
+  .hw-tpl-del:hover { color:var(--red); }
+  .hw-menu-sep { border-top:1px solid var(--line); margin:4px 0; }
+  .hw-attach { display:flex; flex-wrap:wrap; gap:6px; }
+  .hw-attach[hidden] { display:none; }
+  .hw-chip { display:inline-flex; align-items:center; gap:4px; max-width:100%; border:1px solid var(--line);
+    border-radius:999px; padding:2px 2px 2px 10px; font-size:.78rem; background:var(--card); }
+  .hw-chip span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .hw-chip button { min-width:36px; min-height:36px; background:none; border:none; color:var(--muted); cursor:pointer;
+    display:inline-flex; align-items:center; justify-content:center; }
+  #hw-text:focus { outline:none; border-color:var(--accent);
+    box-shadow:0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent); }
+  .hw-bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .hw-note { color:var(--muted); font-size:.74rem; font-variant-numeric:tabular-nums; }
+  .hw-note.near { color:var(--red); }
+  .hw-actions { margin-left:auto; display:flex; gap:8px; }
+  .hw-btn { min-height:44px; padding:10px 18px; border-radius:999px; border:1px solid var(--line);
+    background:var(--card); color:var(--fg); font:inherit; font-size:.88rem; font-weight:700; cursor:pointer; }
+  .hw-btn:hover { border-color:var(--accent); }
+  .hw-btn:disabled { opacity:.55; cursor:default; }
+  .hw-primary { background:var(--accent); border-color:var(--accent); color:var(--bg); }
+  .hw-status { min-height:1.2em; font-size:.8rem; color:var(--teal); }
+  .hw-status.error { color:var(--red); }
+  .hw-recent > summary { min-height:44px; display:flex; align-items:center; gap:6px; color:var(--muted);
+    font-size:.82rem; cursor:pointer; }
+  .hw-recent > summary:hover { color:var(--fg); }
+  .hw-recent > summary::-webkit-details-marker { display:none; }
+  .hw-recent > summary::before { content:'▸'; width:1em; }
+  .hw-recent[open] > summary::before { content:'▾'; }
+  .hw-list { list-style:none; padding:0; margin:2px 0 0; display:flex; flex-direction:column; gap:8px; }
+  .hw-item { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:8px 4px 10px 12px; }
+  .hw-meta { display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:.72rem; color:var(--muted); }
+  .hw-badge { border:1px solid var(--line); border-radius:999px; padding:1px 8px; }
+  .hw-badge.wait { color:var(--accent); border-color:color-mix(in srgb, var(--accent) 40%, transparent); }
+  .hw-del, .hw-edit-btn { display:inline-flex; align-items:center; justify-content:center; }
+  .hw-del { margin-left:auto; min-width:44px; min-height:44px; margin-block:-8px; background:none; border:none;
+    color:var(--muted); font:inherit; cursor:pointer; }
+  .hw-del:hover { color:var(--red); }
+  .hw-edit-btn { margin-left:auto; min-width:44px; min-height:44px; margin-block:-8px; background:none; border:none;
+    color:var(--muted); font:inherit; cursor:pointer; }
+  .hw-edit-btn:hover { color:var(--accent); }
+  .hw-edit-btn + .hw-del { margin-left:0; }
+  .hw-editor { width:100%; min-height:8em; margin-top:6px; resize:vertical; background:var(--bg); color:var(--fg);
+    border:1px solid var(--accent); border-radius:8px; padding:8px 10px; font:inherit; font-size:.86rem; line-height:1.65; }
+  .hw-edit-actions { display:flex; gap:8px; justify-content:flex-end; margin:6px 8px 0 0; }
+  .hw-edit-actions button { min-height:44px; padding:6px 14px; border-radius:999px; border:1px solid var(--line);
+    background:var(--card); color:var(--fg); font:inherit; font-size:.8rem; cursor:pointer; }
+  .hw-edit-actions .hw-edit-save { background:var(--accent); border-color:var(--accent); color:var(--bg); }
+  .hw-more { margin-top:8px; min-height:44px; width:100%; border:1px dashed var(--line); border-radius:10px;
+    background:none; color:var(--muted); font:inherit; font-size:.8rem; cursor:pointer; }
+  .hw-more:hover { color:var(--fg); border-color:var(--accent); }
+  .hw-body { margin-top:4px; padding-right:8px; font-size:.86rem; line-height:1.65; white-space:pre-wrap;
+    overflow-wrap:anywhere; display:-webkit-box; -webkit-line-clamp:4; -webkit-box-orient:vertical;
+    overflow:hidden; cursor:pointer; }
+  .hw-body.open { display:block; }
+  .hw-body[hidden] { display:none; }  /* 上の display 指定が hidden 属性を上書きするため（編集中は本文を隠す） */
+  .hw-detail { margin-top:4px; padding-right:8px; font-size:.74rem; color:var(--muted); }
+  .hw-empty { color:var(--muted); font-size:.8rem; padding:6px 2px; }
+  @media (max-width:700px) {
+    .hw { padding:14px 12px 24px; }
+    #hw-text { min-height:44vh; padding:14px 15px; }
+    .hw-actions { width:100%; margin-left:0; }
+    .hw-btn { flex:1; }
+  }
+"""
+
+HOME_PAGE = """<!DOCTYPE html>
+<html lang="ja"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+__HEAD__
+<title>__TITLE__</title>
+<style>__CSS__</style>
+</head><body>
+<!--SHUKI_PAGE_HEADER-->
+<main class="hw">
+  <form id="hw-form" class="hw-form">
+    <label for="hw-text" class="sr-only">メモ</label>
+    <div class="hw-editor-wrap">
+      <textarea id="hw-text" maxlength="__MAX__" spellcheck="true"
+        placeholder="思いついたこと、今日あったこと、まだ形になっていないこと"></textarea>
+      <button type="button" id="hw-plus" class="hw-plus" title="添付・スキル・テンプレート"
+        aria-label="添付・スキル・テンプレート" aria-expanded="false" aria-controls="hw-plus-menu">__ICON_PLUS__</button>
+      <div id="hw-plus-menu" class="hw-plus-menu" hidden>
+        <div class="hw-menu-main">
+          <button type="button" class="hw-menu-item" data-act="attach">__ICON_ATTACH__ ファイルを添付</button>
+          <button type="button" class="hw-menu-item" data-act="skill">__ICON_LAYERS__ スキルを実行</button>
+          <button type="button" class="hw-menu-item" data-act="template">__ICON_TEMPLATE__ テンプレート</button>
+        </div>
+        <div class="hw-menu-templates" hidden></div>
+      </div>
+    </div>
+    <input id="hw-file" type="file" accept="image/*,.pdf,.txt,.md,.csv" hidden>
+    <div id="hw-attach" class="hw-attach" hidden></div>
+    <div class="hw-bar">
+      <span id="hw-note" class="hw-note">下書きはこのブラウザに残ります</span>
+      <div class="hw-actions">
+        <button type="submit" class="hw-btn" data-processing="record" title="AIには渡さず、記録として残す">記録だけ</button>
+        <button type="submit" class="hw-btn hw-primary" data-processing="ai" title="次の便でAIがタスク化・整理する（Ctrl+Enter）">AIに渡す</button>
+      </div>
+    </div>
+    <p id="hw-status" class="hw-status" role="status" aria-live="polite"></p>
+  </form>
+  <details class="hw-recent"><summary id="hw-recent-head">最近のメモ</summary><ul id="hw-list" class="hw-list"></ul>
+    <button type="button" id="hw-more" class="hw-more" hidden>さらに表示</button></details>
+  <!--SHUKI_HOME_UPDATES-->
+</main>
+<!--SHUKI_BOTTOM_NAV-->
+<script>
+(() => {
+  // 画面の文言は render_home_html() が t() で訳して埋め込む（表が長くなると tt_js_ui の検出範囲を
+  // はみ出し、後半の項目が訳されなかったため・2026-10-08）。数の差し込みは %n。
+  const HOME_LABELS = __HOME_LABELS__;
+  const L = HOME_LABELS;
+  const ICON_EDIT = '__ICON_EDIT__', ICON_DEL = '__ICON_DEL__';
+  // repair-letter ルーティン（習慣ページから ?routine=repair-letter で開く）は、本文をサーバーへ送らず
+  // 下書きをこのブラウザに残し、完了だけを記録する（旧 /journal の専用モードを移設・2026-10-08）
+  const REPAIR = new URLSearchParams(location.search).get('routine') === 'repair-letter';
+  const REPAIR_TEMPLATE = '言ったこと（事実）:\\n\\n分かっている影響（推測は書かない）:\\n\\n言ってしまった理由:\\n\\n繰り返さないための行動を一つ:\\n\\n謝りたいこと:';
+  const MAX = __MAX__, DRAFT_KEY = REPAIR ? 'shuki-repair-letter-draft-v1' : 'shuki-home-draft-v1';
+  const form = document.getElementById('hw-form');
+  const area = document.getElementById('hw-text');
+  const note = document.getElementById('hw-note');
+  const status = document.getElementById('hw-status');
+  const buttons = Array.from(form.querySelectorAll('.hw-btn'));
+  const list = document.getElementById('hw-list');
+  const head = document.getElementById('hw-recent-head');
+  let draftTimer = 0;
+
+  function setStatus(text, isError) {
+    status.textContent = text || '';
+    status.classList.toggle('error', !!isError);
+  }
+  function updateNote() {
+    const left = MAX - area.value.length;
+    note.classList.toggle('near', left < MAX * .1);
+    note.textContent = left < MAX * .1 ? L.left.replace('%n', left.toLocaleString()) : (REPAIR ? L.idleRepair : L.idle);
+  }
+  function saveDraft() {
+    try { area.value ? localStorage.setItem(DRAFT_KEY, area.value) : localStorage.removeItem(DRAFT_KEY); } catch (_) {}
+  }
+  area.addEventListener('input', () => {
+    updateNote();
+    clearTimeout(draftTimer);
+    draftTimer = setTimeout(saveDraft, 300);
+  });
+  area.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      form.requestSubmit(form.querySelector(REPAIR ? '[data-processing="record"]' : '[data-processing="ai"]'));
+    }
+  });
+  try {
+    const saved = localStorage.getItem(DRAFT_KEY);
+    if (saved) area.value = saved;
+  } catch (_) {}
+  if (REPAIR) {
+    form.querySelector('[data-processing="ai"]').hidden = true;
+    form.querySelector('[data-processing="record"]').textContent = L.repairButton;
+    document.querySelectorAll('.hw-recent, .sum-band').forEach(el => { el.hidden = true; });
+    document.getElementById('hw-plus').hidden = true;
+    if (!area.value) { area.value = REPAIR_TEMPLATE; saveDraft(); }
+  }
+  updateNote();
+  if (window.matchMedia('(pointer: fine)').matches) area.focus();
+
+  async function post(url, body) {
+    const r = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    let d = {};
+    try { d = await r.json(); } catch (_) {}
+    if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
+    return d;
+  }
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const text = area.value.trim();
+    const processing = e.submitter && e.submitter.dataset.processing === 'record' ? 'record' : 'ai';
+    if (!text && (REPAIR || !attachments.length)) { setStatus(L.empty, true); area.focus(); return; }
+    if (REPAIR && text === REPAIR_TEMPLATE.trim()) { setStatus(L.repairHeadings, true); return; }
+    buttons.forEach(b => { b.disabled = true; });
+    try {
+      if (REPAIR) {
+        saveDraft();
+        await post('/habit/repair-complete', {});  // 本文は送らない
+        setStatus(L.repairDone, false);
+        return;
+      }
+      setStatus(processing === 'ai' ? L.sendingAi : L.sendingRecord, false);
+      await post('/queue', {name: 'memo', payload: {text: withAttachments(text), processing, source: 'home'}});
+      attachments = [];
+      renderAttach();
+      area.value = '';
+      saveDraft();
+      updateNote();
+      setStatus(processing === 'ai' ? L.doneAi : L.doneRecord, false);
+      if (window.SFX) SFX.memo_sent();
+      loadList();
+    } catch (err) {
+      setStatus((processing === 'ai' && !REPAIR ? L.failAi : L.failRecord) + '（' + err.message + '）', true);
+    } finally {
+      buttons.forEach(b => { b.disabled = false; });
+    }
+  });
+
+  // ── ＋メニュー（添付・スキル・テンプレート・2026-10-08） ──
+  const plus = document.getElementById('hw-plus');
+  const menu = document.getElementById('hw-plus-menu');
+  const menuMain = menu.querySelector('.hw-menu-main');
+  const menuTpl = menu.querySelector('.hw-menu-templates');
+  const fileInput = document.getElementById('hw-file');
+  const attachBox = document.getElementById('hw-attach');
+  let attachments = [];
+  function closeMenu() {
+    menu.hidden = true;
+    plus.setAttribute('aria-expanded', 'false');
+  }
+  plus.addEventListener('click', () => {
+    const open = menu.hidden;
+    menuMain.hidden = false;
+    menuTpl.hidden = true;
+    menu.hidden = !open;
+    plus.setAttribute('aria-expanded', String(open));
+    if (open) menuMain.querySelector('button').focus();
+  });
+  document.addEventListener('click', e => { if (!e.target.closest('#hw-plus, #hw-plus-menu')) closeMenu(); });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && !menu.hidden) { closeMenu(); plus.focus(); }
+  });
+  menu.addEventListener('click', e => {
+    const act = e.target.closest('[data-act]');
+    if (!act) return;
+    if (act.dataset.act === 'attach') { closeMenu(); fileInput.click(); }
+    // ドック側の「外側クリックで閉じる」処理と同じクリックで競合しないよう、次のタイミングで開く
+    else if (act.dataset.act === 'skill') { closeMenu(); setTimeout(startSkill, 0); }
+    else if (act.dataset.act === 'template') { renderTemplates(); menuMain.hidden = true; menuTpl.hidden = false; }
+  });
+
+  // 添付：メモ用の消えないフォルダに保存し、送る時に本文の末尾へ「添付: 名前（パス）」を書き足す
+  fileInput.addEventListener('change', async () => {
+    const file = fileInput.files && fileInput.files[0];
+    fileInput.value = '';
+    if (!file) return;
+    setStatus(L.uploading, false);
+    try {
+      const r = await fetch('/upload?keep=memo&name=' + encodeURIComponent(file.name),
+        {method: 'POST', headers: {'Content-Type': file.type || 'application/octet-stream'}, body: file});
+      let d = {};
+      try { d = await r.json(); } catch (_) {}
+      if (!r.ok || !d.path) throw new Error(d.error || 'HTTP ' + r.status);
+      attachments.push({name: d.name, path: d.path});
+      renderAttach();
+      setStatus('', false);
+    } catch (err) {
+      setStatus(L.attachFailed + '（' + err.message + '）', true);
+    }
+  });
+  function renderAttach() {
+    attachBox.replaceChildren(...attachments.map((a, i) => {
+      const chip = document.createElement('span');
+      chip.className = 'hw-chip';
+      const name = document.createElement('span');
+      name.textContent = a.name;
+      name.title = a.path;
+      const x = document.createElement('button');
+      x.type = 'button';
+      x.innerHTML = ICON_DEL;
+      x.title = L.removeAttach;
+      x.setAttribute('aria-label', L.removeAttach);
+      x.addEventListener('click', () => { attachments.splice(i, 1); renderAttach(); });
+      chip.append(name, x);
+      return chip;
+    }));
+    attachBox.hidden = !attachments.length;
+  }
+  function withAttachments(text) {
+    if (!attachments.length) return text;
+    const lines = attachments.map(a => L.attachLine + a.name + '（' + a.path + '）').join('\\n');
+    return (text ? text + '\\n\\n' : '') + lines;
+  }
+
+  // Run the chosen skill with the memo and attachments; keep the Home draft available.
+  function startSkill() {
+    shukiRunHomeSkill(withAttachments(area.value.trim()));
+  }
+
+  // テンプレート：旧 /journal と同じ定型文。自分の型も同じ保存場所から引き継ぐ
+  const TEMPLATE_KEY = 'shuki-journal-templates-v1';
+  const BUILTIN_TEMPLATES = [
+    {id: 'daily', name: L.tplDaily, text: '今日あったこと:\\n\\n印象に残ったこと:\\n\\n気づいたこと:\\n\\n次に試したいこと:'},
+    {id: 'conversation', name: L.tplConversation, text: REPAIR_TEMPLATE},
+    {id: 'image', name: L.tplImage, text: '画像にしたいもの・場面:\\n\\n構図・視点:\\n\\nスタイル・質感:\\n\\n色・光:\\n\\n入れたい要素:\\n\\n避けたい要素:\\n\\n縦横比・サイズ:'},
+  ];
+  function customTemplates() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(TEMPLATE_KEY) || '[]');
+      return Array.isArray(saved) ? saved.filter(t => t && typeof t.id === 'string'
+        && typeof t.name === 'string' && typeof t.text === 'string') : [];
+    } catch (_) { return []; }
+  }
+  function storeCustom(list) {
+    try { localStorage.setItem(TEMPLATE_KEY, JSON.stringify(list)); return true; } catch (_) { return false; }
+  }
+  function menuButton(label, onClick) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'hw-menu-item';
+    b.textContent = label;
+    b.addEventListener('click', onClick);
+    return b;
+  }
+  function insertTemplate(t) {
+    if (area.value.trim() && !confirm(L.replaceConfirm)) return;
+    area.value = t.text;
+    area.dispatchEvent(new Event('input'));
+    closeMenu();
+    area.focus();
+    area.setSelectionRange(area.value.length, area.value.length);
+  }
+  function renderTemplates() {
+    menuTpl.replaceChildren();
+    menuTpl.append(menuButton('‹ ' + L.back, () => { menuTpl.hidden = true; menuMain.hidden = false; }));
+    menuTpl.append(Object.assign(document.createElement('div'), {className: 'hw-menu-sep'}));
+    BUILTIN_TEMPLATES.forEach(t => menuTpl.append(menuButton(t.name, () => insertTemplate(t))));
+    customTemplates().forEach(t => {
+      const row = document.createElement('div');
+      row.className = 'hw-tpl-row';
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'hw-tpl-del';
+      del.innerHTML = ICON_DEL;
+      del.title = L.del;
+      del.setAttribute('aria-label', L.del);
+      del.addEventListener('click', () => {
+        if (!confirm(L.tplDeleteConfirm)) return;
+        storeCustom(customTemplates().filter(x => x.id !== t.id));
+        renderTemplates();
+      });
+      row.append(menuButton(t.name, () => insertTemplate(t)), del);
+      menuTpl.append(row);
+    });
+    menuTpl.append(Object.assign(document.createElement('div'), {className: 'hw-menu-sep'}));
+    menuTpl.append(menuButton(L.saveTpl, () => {
+      const text = area.value.trim();
+      if (!text) { setStatus(L.empty, true); closeMenu(); return; }
+      const name = (prompt(L.tplName) || '').trim();
+      if (!name) return;
+      const bytes = new Uint8Array(8);
+      crypto.getRandomValues(bytes);
+      const id = 'custom-' + Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+      if (!storeCustom(customTemplates().concat({id, name: name.slice(0, 60), text}))) {
+        setStatus(L.tplSaveFailed, true);
+        return;
+      }
+      setStatus(L.tplSaved, false);
+      renderTemplates();
+    }));
+    menuTpl.querySelector('button').focus();
+  }
+
+  function item(m, open) {
+    const li = document.createElement('li');
+    li.className = 'hw-item';
+    const meta = document.createElement('div');
+    meta.className = 'hw-meta';
+    const when = document.createElement('span');
+    when.textContent = String(m.ts || '').slice(5, 16).replace('T', ' ');
+    const badge = document.createElement('span');
+    const record = m.processing === 'record';
+    badge.className = 'hw-badge' + (open ? ' wait' : '');
+    badge.textContent = record ? L.record : open ? L.wait : (L[m.outcome] || L.sorted);
+    meta.append(when, badge);
+    if (m.source === 'calendar' && m.calendar_summary) {
+      const src = document.createElement('span');
+      src.textContent = L.event + m.calendar_summary;
+      meta.append(src);
+    }
+    const editable = open || record;  // 整理済みのAIメモは結果の記録として表示だけ
+    if (editable) {
+      const edit = document.createElement('button');
+      edit.type = 'button';
+      edit.className = 'hw-edit-btn';
+      edit.innerHTML = ICON_EDIT;
+      edit.title = L.edit;
+      edit.setAttribute('aria-label', L.edit);
+      edit.addEventListener('click', () => startEdit(li, m));
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'hw-del';
+      del.innerHTML = ICON_DEL;
+      del.title = L.del;
+      del.setAttribute('aria-label', L.del);
+      del.addEventListener('click', async () => {
+        if (!confirm(L.confirmDel)) return;
+        await fetch('/memo-delete', {method: 'POST', body: JSON.stringify({id: m.id})}).catch(() => {});
+        loadList();
+      });
+      meta.append(edit, del);
+    }
+    const body = document.createElement('div');
+    body.className = 'hw-body';
+    body.textContent = m.text || '';
+    body.addEventListener('click', () => body.classList.toggle('open'));
+    li.append(meta, body);
+    if (!open && !record && m.outcome_detail) {
+      const detail = document.createElement('div');
+      detail.className = 'hw-detail';
+      detail.textContent = m.outcome_detail;
+      li.append(detail);
+    }
+    return li;
+  }
+  function startEdit(li, m) {
+    if (li.querySelector('.hw-editor')) return;
+    const body = li.querySelector('.hw-body');
+    const editor = document.createElement('textarea');
+    editor.className = 'hw-editor';
+    editor.maxLength = MAX;
+    editor.value = m.text || '';
+    const actions = document.createElement('div');
+    actions.className = 'hw-edit-actions';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.textContent = L.cancel;
+    const save = document.createElement('button');
+    save.type = 'button';
+    save.className = 'hw-edit-save';
+    save.textContent = L.save;
+    actions.append(cancel, save);
+    body.hidden = true;
+    body.after(editor, actions);
+    editor.focus();
+    cancel.addEventListener('click', () => { editor.remove(); actions.remove(); body.hidden = false; });
+    save.addEventListener('click', async () => {
+      const text = editor.value.trim();
+      if (!text) { setStatus(L.empty, true); return; }
+      save.disabled = cancel.disabled = true;
+      try {
+        const d = await post('/memo-edit', {id: m.id, text});
+        if (!d.ok) throw new Error('not found');
+        loadList();
+      } catch (err) {
+        setStatus(L.editFailed + '（' + err.message + '）', true);
+        save.disabled = cancel.disabled = false;
+      }
+    });
+  }
+  let shown = 15;
+  const more = document.getElementById('hw-more');
+  more.addEventListener('click', () => { shown += 30; loadList(); });
+  async function loadList() {
+    if (REPAIR) return;
+    const get = (u) => fetch(u).then(r => r.ok ? r.json() : []).catch(() => []);
+    const [opened, done] = await Promise.all([get('/memo-list'), get('/memo-list-done?all=1&limit=' + shown)]);
+    const rows = opened.map(m => [m, true]).concat(done.map(m => [m, false]))
+      .sort((a, b) => String(b[0].ts).localeCompare(String(a[0].ts)));
+    list.replaceChildren(...rows.slice(0, shown).map(([m, open]) => item(m, open)));
+    if (!rows.length) {
+      const empty = document.createElement('li');
+      empty.className = 'hw-empty';
+      empty.textContent = L.none;
+      list.append(empty);
+    }
+    // 処理済みを上限まで取れた＝まだ古いものがあり得る
+    more.hidden = !(rows.length > shown || done.length >= shown);
+    more.textContent = L.more;
+    head.textContent = L.recent + (opened.length ? L.unsorted.replace('%n', opened.length) : '');
+  }
+  loadList();
+})();
+</script>
+</body></html>"""
+
+
+@shuki_i18n.page_context("home")
+def render_home_html():
+    """ホーム（/）。2026-10-08 から「書く」専用の画面にした。
+
+    ユーザー：「今は主にメモ。今日の一手とかもいらない。メモは日記のように広く自由に書けるといい」
+    「page updateはたまに使う」。いったん /journal を流用したが、育成XP・テーマ・テンプレートが
+    分かりにくいとのことで、ホーム専用に作り直した。保存は既存の memo キュー（source: home）に入れ、
+    「AIに渡す」は従来の投函メモと同じく orchestrator の回収便が整理する（図鑑更新ジョブ・育成XPは無し）。
+    ブリーフィングはキャッチアップ（対話）へ、決裁と使用量パネルはサイドバーへ移した。
+    """
+    today = date.today()
+    weekday = WEEKDAYS[today.weekday()] if shuki_i18n.is_ja() else WEEKDAYS_EN[today.weekday()]
+    name_esc = html.escape(dashboard_settings.dashboard_name(dashboard_settings.load_settings()))
+    title = f'{name_esc}<span class="date">{today.isoformat()} ({weekday})</span>'
+    page = (HOME_PAGE.replace("__HEAD__", dashboard_ui.pwa_head() + dashboard_chat.assets_head())
+            .replace("__CSS__", HOME_WRITE_CSS + SUM_BAND_CSS + dashboard_ui.RESPONSIVE_CSS)
+            .replace("__TITLE__", name_esc).replace("__MAX__", str(HOME_MEMO_MAX_CHARS))
+            .replace("__ICON_EDIT__", dashboard_icons.ui_icon_svg("pencil", 15))
+            .replace("__ICON_DEL__", dashboard_icons.ui_icon_svg("cross", 13))
+            .replace("__ICON_PLUS__", dashboard_icons.ui_icon_svg("plus", 26))
+            .replace("__ICON_ATTACH__", dashboard_icons.ui_icon_svg("attach", 18))
+            .replace("__ICON_LAYERS__", dashboard_icons.ui_icon_svg("layers", 18))
+            .replace("__ICON_TEMPLATE__", dashboard_icons.ui_icon_svg("book", 18)))
+    page = dashboard_ui.hydrate_shell(page, "home", title)
+    labels = {k: shuki_i18n.t(v, ctx="home") for k, v in HOME_LABELS.items()}
+    page = page.replace("__HOME_LABELS__", json.dumps(labels, ensure_ascii=False).replace("<", "\\u003c"), 1)
+    # 各ページの更新は値に vault 由来の文字列を含むので、ページ全体の翻訳処理が終わった後に差し込む
+    return shuki_i18n.set_html_lang(page.replace("<!--SHUKI_HOME_UPDATES-->", page_summary_band_html(), 1))
+
+
 @shuki_i18n.page_context("home")
 def render_html():
     recommendations = PLUGINS.data("operations", "recommendations")
@@ -5645,7 +6397,6 @@ def render_html():
     # ── セクション組み立て（表示ON/OFF・並び順は設定に従う。第1段階＝ホームのみ） ──
     section_blocks = {
         "focus": focus_band,
-        "accounts": accounts_band_html(),
         "achievements": ach_band,
         "pages": page_summary_band_html(),
         "skills": (f'<details class="sgroups-box"><summary>{dashboard_icons.ui_icon_svg("toolbox", 14)} '
@@ -5663,7 +6414,6 @@ def render_html():
     top_stack = "".join(section_blocks[k] for k in settings["order"]
                          if sec.get(k, True) and k in section_blocks)
     board_sec = f'<section class="board">{board}</section>' if sec.get("board", True) else ""
-    radio_html = PLUGINS.home_widget_html("briefing")  # 🔊 音声版ブリーフィング（private briefing plugin）
     # ⚖️決裁カードは専用ページ（/decisions）へ切り出し済み。ホームは入口リンクの
     # 行だけを持つ（縦積み表示はユーザーのフィードバックで撤去・2026-08-28）。
     panel_entries = "".join(
@@ -5673,7 +6423,7 @@ def render_html():
         ) if n
     ) or f'<p class="muted">{dashboard_icons.ui_icon_svg("celebrate", 14)} {_t("決裁カードなし")}</p>'
     standup_sec = (f'<aside class="standup" id="standup-panel">'
-                   f'<h2>{dashboard_icons.ui_icon_svg("sunrise", 18)} {_t("今日のブリーフィング")}</h2>{radio_html}{standup}'
+                   f'<h2>{dashboard_icons.ui_icon_svg("sunrise", 18)} {_t("今日のブリーフィング")}</h2>{standup}'
                    f'<h2>{dashboard_icons.ui_icon_svg("scale", 17)} {_t("決裁カード")}</h2>'
                    f'<div class="panel-entry-row">{panel_entries}</div></aside>'
                    ) if sec.get("standup", True) else ""
@@ -5703,7 +6453,7 @@ def render_html():
 </head>
 <body>
 <noscript><p style="background:{P['red']}33;color:{P['red']};padding:8px 12px;border-radius:8px;">
-⚠ {_t("JavaScriptが無効のため、ボタン操作はできません（表示のみ）。簡易表示・リーダーモードを解除してください。")}</p></noscript>
+{dashboard_icons.ui_icon_svg("warn")} {_t("JavaScriptが無効のため、ボタン操作はできません（表示のみ）。簡易表示・リーダーモードを解除してください。")}</p></noscript>
 {dashboard_ui.bottom_nav_html("home")}
 {header_html}
 {PLUGINS.home_widget_html("meeting")}
@@ -5803,13 +6553,13 @@ def render_html():
     var main = '<div class="memo-li-main">'
       + '<span class="memo-li-text">' + escHtml(it.text) + '</span>'
       + (it.source === 'journal' ? '<span class="memo-li-source">{_t("自由記述")}</span>' : '')
-      + (it.source === 'calendar' ? '<span class="memo-li-source">📅 ' + escHtml(it.calendar_summary || '{_t("予定")}') + '</span>' : '')
+      + (it.source === 'calendar' ? '<span class="memo-li-source">' + shukiIcon('calendar', 13) + ' ' + escHtml(it.calendar_summary || '{_t("予定")}') + '</span>' : '')
       + '<span class="memo-li-ts">' + escHtml(it.ts.slice(5, 16)) + '</span>'
       + (editable ? '<button type="button" class="memo-li-go" data-exec-skill="" data-exec-label="{_t("メモ振り分け")}"'
           + ' data-exec-text="' + escHtml(encodeURIComponent(memoDispatchText(it)).replace(/'/g, '%27'))
           + '" title="{_t("3時間便を待たず、このメモだけ今すぐorchestratorへ振り分ける")}">{_t("▶ 振り分け")}</button>' : '')
-      + (editable ? '<button type="button" class="memo-li-edit" data-memo-edit title="{_t("編集")}">✎</button>' : '')
-      + '<button type="button" class="memo-li-del" data-memo-del title="{_t("削除")}">✕</button>'
+      + (editable ? '<button type="button" class="memo-li-edit" data-memo-edit title="{_t("編集")}">' + shukiIcon('pencil', 13) + '</button>' : '')
+      + '<button type="button" class="memo-li-del" data-memo-del title="{_t("削除")}">' + shukiIcon('cross', 13) + '</button>'
       + '</div>';
     var outcome = '';
     if (!editable && (it.resolved_at || it.outcome || it.outcome_detail)) {{
@@ -5843,91 +6593,6 @@ def render_html():
     }});
   }}
   loadMemoList();
-
-  // ── Claudeアカウントパネル（/usage-accounts: 2契約分の残量+reset時刻・5分キャッシュ） ──
-  function fmtResetIn(iso) {{
-    if (!iso) return '';
-    const d = new Date(iso);
-    if (isNaN(d)) return '';
-    let min = Math.max(0, Math.round((d - new Date()) / 60000));
-    const days = Math.floor(min / 1440); min -= days * 1440;
-    const hours = Math.floor(min / 60); min -= hours * 60;
-    let s = '';
-    if (days) s += days + 'd,';
-    if (days || hours) s += String(hours).padStart(2, '0') + 'h';
-    s += String(min).padStart(2, '0') + 'm';
-    return 'reset ' + s;
-  }}
-  function refreshWarnHtml(data) {{
-    // refreshToken の残り寿命が7日以内なら警告バッジ（切れると自動更新不可＝そのアカウントが
-    // 完全に使えなくなる。2026-08-28 .claude-b で実際に踏んだ事故の再発防止）。
-    if (!data || !data.refresh_expires_at) return '';
-    const days = Math.floor((new Date(data.refresh_expires_at) - new Date()) / 86400000);
-    if (days > 7) return '';
-    const label = days <= 0 ? '{_t("ログイン切れ")}' : '{_t("あと")}' + days + '{_t("日でログイン切れ")}';
-    return '<div class="acc-refresh-warn">⚠ ' + label + '</div>';
-  }}
-  let accountUsageLoading = false;
-  function showAccountUsageError(card, data) {{
-    const body = card.querySelector('.acc-body');
-    body.innerHTML = refreshWarnHtml(data);
-    const error = document.createElement('span');
-    error.className = 'muted';
-    error.textContent = '{_t("取得失敗")}' + (data && data.error ? ' (' + data.error + ')' : '');
-    const retry = document.createElement('button');
-    retry.type = 'button';
-    retry.className = 'acc-retry';
-    retry.textContent = '{_t("再試行")}';
-    retry.addEventListener('click', () => {{
-      retry.disabled = true;
-      loadAccountUsage();
-    }}, {{once: true}});
-    body.append(error, document.createTextNode(' '), retry);
-  }}
-  function loadAccountUsage() {{
-    const band = $('accounts-band');
-    if (!band || accountUsageLoading) return;  // セクション非表示、または取得中
-    accountUsageLoading = true;
-    fetch('/usage-accounts').then(r => r.json().then(d => {{
-      if (!r.ok) throw new Error((d && d.error) || 'HTTP ' + r.status);
-      return d;
-    }})).then(d => {{
-      band.querySelectorAll('.acc-card').forEach(card => {{
-        const data = d[card.dataset.account];
-        const body = card.querySelector('.acc-body');
-        const warn = refreshWarnHtml(data);
-        if (!data || data.error) {{
-          showAccountUsageError(card, data);
-          return;
-        }}
-        const windows = card.dataset.account === 'codex'
-          ? [['five_hour', '{_t("5時間", ctx="home")}'], ['seven_day', '{_t("週次", ctx="home")}']]
-          : {json.dumps([(key, _t(label, ctx="home")) for key, label in CC_USAGE_WINDOWS], ensure_ascii=False)};
-        const rows = windows.map(([wkey, wlabel]) => {{
-          const w = data[wkey];
-          if (!w || w.utilization == null) return '';
-          const u = w.utilization;
-          const cls = u >= {CC_USAGE_DANGER} ? 'danger' : (u >= {CC_USAGE_WARN} ? 'warn' : '');
-          const reset = fmtResetIn(w.resets_at);
-          return '<div class="acc-row"><span class="acc-wlabel">' + wlabel + '</span>'
-            + '<span class="u-chip' + (cls ? ' ' + cls : '') + '"><span class="u-dot"></span>' + u.toFixed(0) + '%</span>'
-            + (reset ? '<span class="acc-reset">' + reset + '</span>' : '') + '</div>';
-        }}).join('');
-        const codexMeta = card.dataset.account === 'codex'
-          ? '<div class="acc-row"><span class="acc-wlabel">{_t("リセット権", ctx="home")}</span><span class="u-chip">'
-            + (data.available_resets ?? 0) + '{_t("回", ctx="home")}</span></div>'
-            + '<div class="acc-row"><span class="acc-wlabel">{_t("残クレジット", ctx="home")}</span><span class="u-chip">'
-            + ((data.credits && data.credits.balance) || '0') + '</span></div>'
-          : '';
-        body.innerHTML = warn + (rows + codexMeta || '<span class="muted">{_t("データなし", ctx="home")}</span>');
-      }});
-    }}).catch(error => {{
-      band.querySelectorAll('.acc-card').forEach(card => {{
-        showAccountUsageError(card, {{error: error && error.message}});
-      }});
-    }}).finally(() => {{ accountUsageLoading = false; }});
-  }}
-  loadAccountUsage();
 
   // ── アチーブメントバー: ロード時にバー伸長＋数字カウントアップ（進捗が動く瞬間の演出） ──
   (function animateAchBand() {{
@@ -6077,7 +6742,7 @@ def render_settings_html():
 <html lang="ja"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 {dashboard_ui.pwa_head()}
-<title>⚙️ 設定 · {name}</title>
+<title>設定 · {name}</title>
 <style>
 {SETTINGS_CSS}
 </style>
@@ -6100,6 +6765,7 @@ def render_settings_html():
 </fieldset>
 {shuki_webpush.settings_html()}
 {mcp_health.settings_html()}
+{dashboard_tutorial.settings_html()}
 <div id="custom-settings"{"" if custom else " hidden"}>
 <details class="card settings-group" id="theme-settings">
   <summary>Theme</summary>
@@ -6134,11 +6800,7 @@ def render_settings_html():
       oninput="document.documentElement.style.setProperty('--mascot-color', this.value)">
     <button type="button" class="hbtn" onclick="document.getElementById('mascot-color').value='{dashboard_settings.DEFAULT_MASCOT_COLOR}'; document.getElementById('mascot-color').dispatchEvent(new Event('input'))">Pink</button>
   </div>
-  <label class="ord-check" style="display:flex;margin-top:8px;">
-    <input type="checkbox" id="mascot-wander"{" checked" if settings.get("mascot_wander", True) else ""}>
-    <span>Wander in chat panel</span>
-  </label>
-  <p class="hint">Color is independent of the dashboard theme. Reduced motion keeps the mascot still.</p>
+  <p class="hint">Color is independent of the dashboard theme. Tap the mascot for a random reaction; a few are rare. Reduced motion keeps it still and only changes its face.</p>
   </div>
 </details>
 
@@ -6252,7 +6914,6 @@ def render_settings_html():
       accent: document.getElementById('accent-on').checked ? document.getElementById('accent').value : "",
       mascot_enabled: document.getElementById('mascot-enabled').checked,
       mascot_color: document.getElementById('mascot-color').value,
-      mascot_wander: document.getElementById('mascot-wander').checked,
       sections: sections,
       order: order,
       nav: nav,
@@ -6397,10 +7058,11 @@ def _queue_append_locked(name, payload):
 MEMO_LIST_DAYS = 14  # 一覧に表示する遡り日数（古いものはoutで隠すのではなく件数を絞って閲覧性を保つ）
 
 
-def _memo_files():
-    """新しい順。未回収（ui-queue直下）＋回収済み（processed/、doneでないエントリが残っている場合）両方を見る。"""
+def _memo_files(days=MEMO_LIST_DAYS):
+    """新しい順。未回収（ui-queue直下）＋回収済み（processed/、doneでないエントリが残っている場合）両方を見る。
+    days=None なら日数で絞らない（ホームの履歴「さらに表示」と、古いメモの編集・削除用）。"""
     files = list(UI_QUEUE.glob("memo_*.json")) + list((UI_QUEUE / "processed").glob("memo_*.json"))
-    cutoff = (date.today() - timedelta(days=MEMO_LIST_DAYS)).isoformat()
+    cutoff = (date.today() - timedelta(days=days)).isoformat() if days is not None else ""
     files = [f for f in files if re.search(r"memo_(\d{4}-\d{2}-\d{2})", f.name) and
              re.search(r"memo_(\d{4}-\d{2}-\d{2})", f.name).group(1) >= cutoff]
     return sorted(files, key=lambda p: p.name, reverse=True)
@@ -6755,14 +7417,14 @@ def list_open_memos():
     return out
 
 
-def list_done_memos(limit=20):
+def list_done_memos(limit=20, days=MEMO_LIST_DAYS):
     """status=='done' なメモを新しい順で最大 limit 件返す。
     「投函したメモが消えた」と見えて不安にならないよう、処理済みでも直近分は確認できるようにする（2026-08-25 追加）。
     2026-08-30: 回収時に orchestrator が書き戻す結果3フィールド（resolved_at / outcome / outcome_detail）も返す。
     無い旧メモは空文字（表示側でフォールバック）。
     """
     out = []
-    for f in _memo_files():
+    for f in _memo_files(days):
         try:
             entries = json.loads(f.read_text(encoding="utf-8"))
         except Exception:
@@ -6787,7 +7449,7 @@ def list_done_memos(limit=20):
 
 def _memo_locate(memo_id):
     """memo_id からファイルとエントリindexを探す。見つからなければ (None, None)。"""
-    for f in _memo_files():
+    for f in _memo_files(days=None):
         try:
             entries = json.loads(f.read_text(encoding="utf-8"))
         except Exception:
@@ -6834,11 +7496,41 @@ REQ_LOG = collections.deque(maxlen=300)
 #   公開ネットワーク／通常の LAN             → 接続元アドレスで断る
 #   DNS リバインディング（攻撃者のドメインが 127.0.0.1 を指す） → Host ヘッダで断る
 #   他サイトのページが裏から叩く              → Origin ヘッダで断る（応答は常に CORS 全許可なので GET でも見る）
+#
+# 2026-10-10: 同じ検査（＋Sec-Fetch-Site）を全リクエストの入口 Handler._gate() に広げた。
+# それまでは数ルートだけで、/exec・/files/data は他サイトのページから叩けて読めた（実測）。
+# 通すのは「このPC（127.0.0.1/localhost）」か「登録済みの Tailscale Serve の https オリジン」で、
+# かつ同一オリジン／直接のアクセス（アドレス入力・ブックマーク・PWA・ローカルのスクリプト）だけ。
+
+# 自前で同等以上の入口検査（接続元・Host・Origin、理由コード付き 403）を全ルートに持つ範囲。
+# 二重に掛けると plugin 側の理由コードとテストが崩れるので、ここだけは plugin に任せる。
+SELF_GUARDED_PREFIXES = ("/game/import/",)
+
+BLOCKED_PAGE = (b'<!DOCTYPE html><meta charset="utf-8"><title>SHUKI</title>'
+                b'<p>This request came from another site, so SHUKI refused it.</p>'
+                b'<p><a href="/">Open SHUKI directly</a></p>')
 
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):  # 標準エラーへのアクセスログは出さない
         pass
+
+    def _gate(self):
+        """全リクエストの入口検査。通すなら True、断る時は 403 を返して False。"""
+        site = self.headers.get("Sec-Fetch-Site")
+        if urllib.parse.urlsplit(self.path).path.startswith(SELF_GUARDED_PREFIXES):
+            return True
+        if (shuki_webpush.guard(self.client_address[0], self.headers.get("Host", ""),
+                                self.headers.get("Origin"))
+                and site in (None, "same-origin", "none")):
+            return True
+        REQ_LOG.append(f"{time.strftime('%m-%d %H:%M:%S')} BLOCKED {self.command} "
+                       f"{urllib.parse.urlsplit(self.path).path[:120]} from={self.client_address[0]} site={site}")
+        if self.headers.get("Sec-Fetch-Dest") == "document":
+            self._respond(403, BLOCKED_PAGE, "text/html; charset=utf-8")
+        else:
+            self._json_err(403, "Open this from your SHUKI dashboard.")
+        return False
 
     def _respond(self, code, body=b"", ctype="text/plain; charset=utf-8", compress=True,
                  cache_control=None):
@@ -6857,8 +7549,7 @@ class Handler(BaseHTTPRequestHandler):
         if cache_control:
             self.send_header("Cache-Control", cache_control)
         self.send_header("Content-Length", str(len(body)))
-        # Simple Browser はサンドボックス iframe（origin=null）なので CORS 許可が必須
-        self.send_header("Access-Control-Allow-Origin", "*")
+        # CORS 許可（Access-Control-Allow-Origin: *）は 2026-10-10 に廃止。他サイトのページが応答を読めていた。
         self.end_headers()
         if body:
             self.wfile.write(body)
@@ -6872,11 +7563,12 @@ class Handler(BaseHTTPRequestHandler):
         """互換URLを新しい正規ページへ移す。"""
         self.send_response(code)
         self.send_header("Location", location)
-        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
 
     def do_GET(self):
         global CURRENT_MODEL, AUTO_MODEL_MODE
+        if not self._gate():
+            return
         parsed = urllib.parse.urlparse(self.path)
         qs = urllib.parse.parse_qs(parsed.query)
         if not PLUGINS.owns(parsed.path) and not shuki_core.route_enabled(parsed.path):
@@ -6909,7 +7601,7 @@ class Handler(BaseHTTPRequestHandler):
             if PLUGINS.dispatch(self, "GET", parsed.path, qs):
                 return
             if parsed.path == "/":
-                self._respond(200, render_html().encode("utf-8"), "text/html; charset=utf-8")
+                self._respond(200, render_home_html().encode("utf-8"), "text/html; charset=utf-8")
             elif parsed.path in ("/calendar", "/calendar/"):
                 page = dashboard_calendar.render_calendar_html()
                 # 定例会パネルをこのページに埋め込み、ホームへ移動せずにその場で開く
@@ -7035,7 +7727,13 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/memo-list-done":
                 # 投函欄で書いたメモの処理済み一覧（直近20件・GET /memo-list-done）。
                 # 未処理一覧から消えると「処理されたのか無視されたのか」が分からず不安になるための保険（2026-08-25）。
-                body = json.dumps(list_done_memos(), ensure_ascii=False).encode("utf-8")
+                # ホームの「さらに表示」は ?limit=&all=1 で件数と遡り範囲を広げる（2026-10-08）
+                try:
+                    limit = max(1, min(int(qs.get("limit", ["20"])[0]), 500))
+                except ValueError:
+                    limit = 20
+                days = None if qs.get("all", [""])[0] == "1" else MEMO_LIST_DAYS
+                body = json.dumps(list_done_memos(limit, days), ensure_ascii=False).encode("utf-8")
                 self._respond(200, body, "application/json; charset=utf-8")
             elif parsed.path == "/set-auto-model":
                 enabled = qs.get("enabled", [""])[0]
@@ -7197,6 +7895,14 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/sfx.js":
                 # 操作フィードバックSE（合成音・音声ファイルなし）。全ページが PWA_HEAD 経由で読む。
                 self._respond(200, dashboard_sfx.sfx_js().encode("utf-8"), "application/javascript; charset=utf-8")
+            elif parsed.path == "/tutorial.js":
+                # 初回チュートリアル・画面ガイド（2026-10-09）。全ページが pwa_head() 経由で defer 読み込み。
+                # 文言は表示言語で変わるので都度組み立て、キャッシュさせない。
+                self._respond(200, dashboard_tutorial.tutorial_js().encode("utf-8"),
+                              "application/javascript; charset=utf-8", cache_control="no-cache")
+            elif parsed.path == "/tutorial/state":
+                self._respond(200, json.dumps(dashboard_tutorial.load_state(), ensure_ascii=False).encode("utf-8"),
+                              "application/json; charset=utf-8", cache_control="private, no-store")
             elif parsed.path == "/data":
                 # 表示用データのホワイトリスト読み出し（99_System/trading・ui-queue のみ）
                 got = read_data_file(qs.get("p", [""])[0])
@@ -7217,13 +7923,13 @@ class Handler(BaseHTTPRequestHandler):
                     if choices:
                         messages = messages[:-1] + [dict(messages[-1], text=clean, choices=choices)]
                 body = json.dumps(messages, ensure_ascii=False).encode("utf-8")
-                self._respond(200, body, "application/json; charset=utf-8")
+                self._respond(200, body, "application/json; charset=utf-8", cache_control="private, no-store")
             elif parsed.path == "/usage":
                 body = json.dumps(fetch_cc_usage(), ensure_ascii=False).encode("utf-8")
                 self._respond(200, body, "application/json; charset=utf-8")
             elif parsed.path == "/usage-accounts":
                 # 設定済み Claude アカウント分の残量を返す（Claudeアカウントパネル用。契約構成は shuki_paths.json の claude_accounts が正）
-                body = json.dumps(fetch_cc_usage_accounts(), ensure_ascii=False).encode("utf-8")
+                body = json.dumps(fetch_cc_usage_accounts(force=qs.get("refresh", [""])[0] == "1"), ensure_ascii=False).encode("utf-8")
                 self._respond(200, body, "application/json; charset=utf-8")
             elif parsed.path == "/tts":
                 # ブラウザ <audio> 用の音声合成プロキシ（/voicevox-stop = PC再生停止 とは別物）
@@ -7249,7 +7955,7 @@ class Handler(BaseHTTPRequestHandler):
                     f'<meta name="viewport" content="width=device-width,initial-scale=1">'
                     f'<link rel="stylesheet" href="/theme.css"></head>'
                     f'<body style="padding:16px;font-family:var(--font-ui)">'
-                    f'<h2>⚠️ このページの表示中にエラーが発生しました</h2>'
+                    f'<h2>{dashboard_icons.ui_icon_svg("warn")} このページの表示中にエラーが発生しました</h2>'
                     f'<pre style="white-space:pre-wrap;background:#0002;padding:8px;'
                     f'border-radius:6px">{err_esc}</pre>'
                     f'<p>他のページは正常な場合があります。下のナビか対話ドックから復旧を依頼できます。</p>'
@@ -7258,14 +7964,11 @@ class Handler(BaseHTTPRequestHandler):
             self._respond(500, body.encode("utf-8"), "text/html; charset=utf-8")
 
     def do_OPTIONS(self):
-        if urllib.parse.urlsplit(self.path).path.startswith("/push/"):
-            self._json_err(403, "Cross-origin notification access is not allowed.")
+        # 同一オリジンの画面は preflight を送らない。他サイトからの preflight は _gate で断る。
+        if not self._gate():
             return
-        # Simple Browser（sandbox iframe・origin=null）からの JSON POST の preflight 用
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Allow", "GET, POST, OPTIONS")
         self.end_headers()
 
     def _json_err(self, code, msg):
@@ -7282,6 +7985,9 @@ class Handler(BaseHTTPRequestHandler):
         return self.rfile.read(length)
 
     def _push_post(self, path):
+        if path == "/push/reply":
+            self._push_reply()
+            return
         if not shuki_webpush.guard(self.client_address[0], self.headers.get("Host", ""),
                                   self.headers.get("Origin"), self.headers.get("X-SHUKI-Push"), mutation=True):
             self._json_err(403, "Open notification settings from your SHUKI dashboard.")
@@ -7328,7 +8034,50 @@ class Handler(BaseHTTPRequestHandler):
 
 
 
+    def _push_reply(self):
+        # A short-lived, exact-choice capability replaces the page-only CSRF token.
+        origin = self.headers.get("Origin")
+        if not origin or not shuki_webpush.guard(self.client_address[0], self.headers.get("Host", ""), origin):
+            self._json_err(403, "Open this notification from your SHUKI device.")
+            return
+        try:
+            if self.headers.get("Content-Type", "").split(";", 1)[0] != "application/json":
+                raise ValueError("Expected a JSON notification reply.")
+            raw = self._read_body(1024)
+            data = json.loads(raw) if raw else None
+            if not isinstance(data, dict):
+                raise ValueError("Invalid notification reply.")
+
+            def submit(record, index):
+                with JOB_LOCK:
+                    latest = dialogue_job_for_session(record["session"])
+                    if latest and latest.get("status") == "running":
+                        return {"error": "busy"}
+                    if latest and record["event"] != "chat:" + str(latest.get("id")):
+                        return {"error": "This conversation has moved on. Open it for current choices."}
+                    messages = load_any_transcript(record["session"])
+                    if not messages or messages[-1].get("role") != "assistant":
+                        return {"error": "Current reply choices could not be verified. Open the conversation."}
+                    text, choices = extract_ntfy_choices(messages[-1].get("text", ""))
+                    digest = hashlib.sha256(text[:400].encode()).hexdigest()
+                    if choices != record["choices"] or digest != record["summary"]:
+                        return {"error": "This reply is out of date. Open the conversation for current choices."}
+                    return start_job("", record["choices"][index], session=record["session"], confirm=True)
+
+            result = shuki_webpush.consume_reply(data.get("token"), data.get("index"), submit)
+        except (ValueError, TypeError):
+            self._json_err(400, "This reply is invalid, expired or already used. Open the conversation.")
+        except BlockingIOError:
+            self._json_err(409, "Another reply is being handled. Check the conversation.")
+        except Exception:
+            self._json_err(503, "Reply status is uncertain. Open the conversation before trying again.")
+        else:
+            self._respond(409 if result.get("error") else 200, json.dumps(result).encode(),
+                          "application/json; charset=utf-8", cache_control="private, no-store")
+
     def do_POST(self):
+        if not self._gate():
+            return
         path = urllib.parse.urlparse(self.path).path
         if PLUGINS.dispatch(self, "POST", path, None):
             return
@@ -7428,7 +8177,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._json_err(400, "empty or too large body (max 20MB)")
                 return
             try:
-                dest = save_upload(name, data)
+                # ?keep=memo はホームのメモ添付（消えないフォルダへ）。それ以外はチャット用の一時保存
+                keep = qs.get("keep", [""])[0] == "memo"
+                dest = save_upload(name, data, UI_QUEUE / "memo_attachments" if keep else None)
                 REQ_LOG.append(f"{time.strftime('%m-%d %H:%M:%S')} POST /upload -> {dest.name}")
                 body = json.dumps({"ok": True, "path": str(dest), "name": Path(name).name or dest.name},
                                   ensure_ascii=False).encode("utf-8")
@@ -7497,6 +8248,20 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 if name == "memo" and payload.get("source") == "journal":
                     self._json_err(404, "Journal is not installed or is disabled")
+                    return
+                if name == "memo" and payload.get("source") == "home":
+                    # ホームの書く欄（2026-10-08）。保存するのは本文と処理区分だけ（状態はサーバーが決める）
+                    home_text, processing = payload.get("text"), payload.get("processing", "ai")
+                    if (not isinstance(home_text, str) or not home_text.strip()
+                            or len(home_text) > HOME_MEMO_MAX_CHARS or processing not in ("ai", "record")):
+                        self._json_err(400, "bad home memo")
+                        return
+                    entry = {"text": home_text, "source": "home", "processing": processing, "status": "open"}
+                    if processing == "record":  # 記録だけは最初から処理済み＝AI回収便の対象外（journal と同じ扱い）
+                        entry.update(status="done", outcome="record", outcome_detail="記録として保存（AI処理なし）")
+                    rel = queue_append("memo", entry)
+                    self._respond(200, json.dumps({"ok": True, "file": rel}, ensure_ascii=False).encode("utf-8"),
+                                  "application/json; charset=utf-8")
                     return
                 if name == "memo" and payload.get("source") == "calendar":
                     cal_text = payload.get("text")
@@ -7691,10 +8456,11 @@ class Handler(BaseHTTPRequestHandler):
                 if memo_file is not None:
                     try:
                         memo_entries = json.loads(memo_file.read_text(encoding="utf-8"))
+                        # ホームの書く欄と旧 /journal の長文は、書いた時と同じ上限まで編集できる
                         if (isinstance(memo_entries, list) and memo_idx is not None
                                 and isinstance(memo_entries[memo_idx], dict)
-                                and memo_entries[memo_idx].get("source") == "journal"):
-                            text_limit = PLUGINS.data("journal", "max_chars", text_limit)
+                                and memo_entries[memo_idx].get("source") in ("home", "journal")):
+                            text_limit = HOME_MEMO_MAX_CHARS
                     except Exception:
                         pass
                 if (not memo_id or not isinstance(text, str) or not text.strip()
@@ -7706,6 +8472,22 @@ class Handler(BaseHTTPRequestHandler):
                               "application/json; charset=utf-8")
             except Exception as e:
                 self._json_err(500, str(e))
+        elif self.path == "/tutorial/state":
+            # 初回チュートリアル・画面ガイドの進行（vault 外の <data>/core/tutorial_state.json のみ書く）
+            data = self._read_body(dashboard_tutorial.MAX_BODY)
+            if data is None:
+                self._json_err(400, "empty or too large body")
+                return
+            try:
+                state = dashboard_tutorial.update_state(json.loads(data))
+            except ValueError as e:  # json.JSONDecodeError を含む
+                self._json_err(400, str(e))
+                return
+            except OSError as e:
+                self._json_err(500, f"could not save tutorial state: {e}")
+                return
+            self._respond(200, json.dumps(state, ensure_ascii=False).encode("utf-8"),
+                          "application/json; charset=utf-8", cache_control="private, no-store")
         elif self.path == "/settings":
             # ⚙️ 表示設定の保存（名前・配色・セクション）。vault 外の dashboard_settings.json のみ書く
             data = self._read_body(QUEUE_MAX_BYTES)

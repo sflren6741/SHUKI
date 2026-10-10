@@ -21,7 +21,7 @@ PAGE = """<!DOCTYPE html>
 <html lang="ja"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 """ + dashboard_ui.pwa_head() + dashboard_chat.assets_head() + """
-<title>📰 ニュース</title>
+<title> ニュース</title>
 <style>
   * { box-sizing:border-box; margin:0; }
   body { background:var(--bg); color:var(--fg);
@@ -255,7 +255,7 @@ function renderItem(it) {
   box.className = 'item' + (it.rating ? ' rated' : '');
   const n = starOf(it);
   const stars = '<span class="item-stars s' + n + '" title="' + esc(STAR_TITLE[n]) + '">'
-    + '★'.repeat(n) + '<span style="opacity:.25">' + '★'.repeat(3 - n) + '</span></span>';
+    + (shukiIcon('star')).repeat(n) + '<span style="opacity:.25">' + (shukiIcon('star')).repeat(3 - n) + '</span></span>';
   box.innerHTML =
     '<a class="item-link" href="' + esc(it.url) + '" target="_blank" rel="noopener noreferrer">' +
       '<div class="item-top">' + stars +
@@ -266,9 +266,9 @@ function renderItem(it) {
       (it.reason ? '<div class="item-reason">' + esc(it.reason) + '</div>' : '') +
     '</a>' +
     '<div class="item-react">' +
-      '<button class="rbtn-n" data-v="good" title="役に立った">&#128077; 良かった</button>' +
-      '<button class="rbtn-n" data-v="bad" title="外れだった（今後の選定の参考になる）">&#128078; 外れ</button>' +
-      '<button class="rbtn-n" data-v="skip" title="読まずに閉じる">&#10005;</button>' +
+      '<button class="rbtn-n" data-v="good" title="役に立った">' + shukiIcon('thumbs-up') + ' 良かった</button>' +
+      '<button class="rbtn-n" data-v="bad" title="外れだった（今後の選定の参考になる）">' + shukiIcon('thumbs-down') + ' 外れ</button>' +
+      '<button class="rbtn-n" data-v="skip" title="読まずに閉じる">' + shukiIcon('cross') + '</button>' +
     '</div>';
   box.querySelectorAll('.rbtn-n').forEach(b => {
     b.classList.toggle('on', b.dataset.v === it.rating);

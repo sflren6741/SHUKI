@@ -20,6 +20,8 @@ achievements.py 側の RARITY 辞書は vault 本体（02_Home/🏆 アチーブ
 JS側（achievements/web/app.js）は別ランタイムのため定義を複製するが、コメントで
 このファイルとの同期を明記し、色・形は必ずここに合わせる。
 """
+import json
+
 import shuki_profile
 
 _STROKE = 'fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"'
@@ -244,6 +246,44 @@ UI_PATHS = {
                 '<circle cx="12" cy="16.8" r=".35" fill="currentColor" stroke="none"/>',
     # ☰ クイックアクセス・サイドバーの開閉トリガー（2026-09-26新設）
     "menu": '<path d="M4 6h16M4 12h16M4 18h16"/>',
+    "barrier": '<path d="M4 8h16v7H4zM6 15v5M18 15v5M5 12l4-4M11 15l7-7"/>',
+    "arrow-up": '<path d="M12 20V4M6 10l6-6 6 6"/>',
+    "thumbs-up": '<path d="M8 10l4-7a2 2 0 012 2v4h4a2 2 0 012 2l-1 7a2 2 0 01-2 2H8zM3 10h5v10H3z"/>',
+    "thumbs-down": '<path d="M8 14l4 7a2 2 0 002-2v-4h4a2 2 0 002-2l-1-7a2 2 0 00-2-2H8zM3 4h5v10H3z"/>',
+    "lock": '<rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 018 0v3"/><path d="M12 14v3"/>',
+    "image": '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8" cy="8" r="1.5"/><path d="M3 17l5-5 4 4 4-6 5 7"/>',
+    "music": '<path d="M10 17V5l10-2v12M10 8l10-2"/><ellipse cx="7" cy="18" rx="3" ry="2"/><ellipse cx="17" cy="16" rx="3" ry="2"/>',
+    "sliders": '<path d="M5 3v7M5 14v7M12 3v12M12 19v2M19 3v2M19 9v12M3 10h4v4H3zM10 15h4v4h-4zM17 5h4v4h-4z"/>',
+    "star": '<path d="M12 3l2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9z"/>',
+    "sprout": '<path d="M12 21v-9M12 14C5 14 3 10 3 5c6 0 9 3 9 9zM12 11c0-5 3-8 9-8 0 5-3 8-9 8z"/>',
+    "shield": '<path d="M12 3l8 3v6c0 5-8 9-8 9s-8-4-8-9V6z"/><path d="M8 12l3 3 5-6"/>',
+    "bolt": '<path d="M13 3L5 13h6l-1 8 9-11h-6z"/>',
+    "gem": '<path d="M7 4h10l5 6-10 11L2 10zM2 10h20M7 4l5 17 5-17"/>',
+    "flask": '<path d="M9 3h6M10 3v6L4 18a2 2 0 001.7 3h12.6a2 2 0 001.7-3l-6-9V3M7 14h10"/>',
+    "hypothesis": '<circle cx="12" cy="10" r="7"/><path d="M7 16l-2 5h14l-2-5M10 8a2 2 0 114 0c0 1-2 1.5-2 3M12 13h.01"/>',
+    "moon": '<path d="M20 14a8 8 0 01-10-10 9 9 0 1010 10z"/>',
+    "bulb": '<path d="M8 14a6 6 0 118 0l-1 2H9zM9 19h6M10 22h4"/>',
+    "link": '<path d="M10 14l4-4M8 15l-1 1a4 4 0 01-6-6l4-4a4 4 0 016 0M16 9l1-1a4 4 0 016 6l-4 4a4 4 0 01-6 0"/>',
+    "bell": '<path d="M5 17h14l-2-3V9a5 5 0 00-10 0v5zM10 20h4"/>',
+    "person": '<circle cx="12" cy="7" r="4"/><path d="M4 21v-2a8 8 0 0116 0v2"/>',
+    "handshake": '<path d="M3 8l4-3 5 2 5-2 4 3-3 9-4 3-7-3zM7 5l5 2-4 5 2 2 5-4 4 5M3 8l4 9M21 8l-3 9"/>',
+    "sword": '<path d="M14 3h7v7L9 19l-4-4zM6 18l-3 3M3 13l8 8"/>',
+    "tag": '<path d="M3 3h8l10 10-8 8L3 11z"/><circle cx="7.5" cy="7.5" r="1"/>',
+    "truck": '<path d="M3 5h11v12H3zM14 9h4l3 4v4h-7M18 9v4h3"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="18" r="2.5"/>',
+    "ticket": '<path d="M3 5h18v5a2 2 0 000 4v5H3v-5a2 2 0 000-4zM15 5v3M15 11v2M15 16v3"/>',
+    "skull": '<path d="M7 16a8 8 0 1110 0v4H7zM10 20v-3M14 20v-3"/><circle cx="8.5" cy="10.5" r="1.5"/><circle cx="15.5" cy="10.5" r="1.5"/><path d="M11 14h2"/>',
+    "broom": '<path d="M13 12l6-9M7 11l9 6-5 5-8-5zM5 18l4-5M8 20l4-5"/>',
+    "dot": '<circle cx="12" cy="12" r="4"/>',
+    "square": '<rect x="5" y="5" width="14" height="14" rx="2"/>',
+    "cpu": AREA_ICON_PATHS["cpu"],
+    "gamepad": AREA_ICON_PATHS["gamepad"],
+    "briefcase": AREA_ICON_PATHS["briefcase"],
+    "cards": NAV_PATHS["cards"],
+    "inbox": NAV_PATHS["review"],
+    "chart": NAV_PATHS["visualize"],
+    "trend": NAV_PATHS["trading"],
+    "wallet": NAV_PATHS["finance"],
+    "home": NAV_PATHS["home"],
 }
 
 
@@ -252,5 +292,49 @@ def ui_icon_svg(key, size=16, cls=""):
     path = UI_PATHS.get(key)
     if not path:
         return ""
-    cls_attr = f' class="{cls}"' if cls else ""
-    return f'<svg{cls_attr} viewBox="0 0 24 24" width="{size}" height="{size}" {_STROKE}>{path}</svg>'
+    cls_attr = f' class="shuki-icon {cls}"' if cls else ' class="shuki-icon"'
+    return f'<svg{cls_attr} aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="{size}" height="{size}" {_STROKE}>{path}</svg>'
+
+
+UI_ICON_ALIASES = {
+    "🚧": "barrier", "⚖": "scale", "✅": "check", "⬆": "arrow-up", "📄": "doc",
+    "👍": "thumbs-up", "👎": "thumbs-down", "💬": "comment", "❌": "cross", "🔴": "dot", "🟡": "dot", "🔵": "dot", "⚪": "dot",
+    "⛶": "maximize", "⤡": "shrink", "✕": "cross", "✓": "check", "✗": "cross", "✚": "plus", "✎": "pencil", "✏": "pencil", "★": "star", "⭐": "star",
+    "📝": "pencil", "✨": "sparkle", "🔊": "speaker", "⚠": "warn", "🎯": "target", "🔒": "lock", "🎮": "gamepad", "💡": "bulb", "🖼": "image", "📋": "copy", "📎": "attach", "📊": "chart",
+    "📡": "signal", "📌": "pin", "🕘": "clock", "🔥": "fire", "🎛": "sliders", "🏠": "home", "🎵": "music", "🔔": "bell", "🌱": "sprout", "🌰": "sprout", "⬜": "square", "🟢": "dot",
+    "💵": "wallet", "💼": "briefcase", "🛡": "shield", "📈": "trend", "💸": "wallet", "📂": "folder", "📒": "doc", "📓": "doc", "📅": "calendar", "🔄": "refresh", "🔁": "refresh", "🎉": "celebrate",
+    "🧍": "person", "🧑": "person", "⚡": "bolt", "⚙": "wrench", "📖": "book", "☠": "skull", "📁": "folder", "📚": "book", "📥": "inbox", "🎴": "cards", "🃏": "cards", "⚗": "flask", "🔮": "hypothesis",
+    "💎": "gem", "⚔": "sword", "🌑": "moon", "🧠": "brain", "🧩": "question", "🧭": "compass", "🖥": "monitor", "🗂": "folder", "🗑": "trash", "📰": "newspaper", "💰": "coin", "🏆": "star", "🏷": "tag",
+    "👀": "eye", "💭": "comment", "🔍": "search", "🔎": "search", "🔻": "chevron-down", "🔧": "wrench", "🤖": "cpu", "🤝": "handshake", "🙈": "eye", "🚚": "truck", "🛫": "runway", "🌅": "sunrise",
+    "🟠": "dot", "🧹": "broom", "🩺": "stethoscope", "❓": "question", "🌪": "filter", "🎫": "ticket", "🔗": "link", "📍": "pin", "⏳": "hourglass", "⏰": "clock",
+}
+
+
+def legacy_ui_icon_svg(key, size=18):
+    """Resolve older notice metadata without inserting arbitrary producer markup."""
+    key = str(key or "cpu").replace("\ufe0f", "")
+    key = UI_ICON_ALIASES.get(key, key)
+    return ui_icon_svg(key if key in UI_PATHS else "cpu", size)
+
+
+def browser_icons_script():
+    """Serve the shared paths before page scripts; labels remain ordinary text."""
+    paths = json.dumps(UI_PATHS, ensure_ascii=True)
+    aliases = json.dumps(UI_ICON_ALIASES, ensure_ascii=True)
+    return '''<script>
+(function() {
+  const paths = ''' + paths + ''';
+  const aliases = ''' + aliases + ''';
+  window.shukiIcon = function(key, size = 16) {
+    key = String(key || '').replace(/\uFE0F/g, '');
+    key = aliases[key] || key;
+    if (!Object.prototype.hasOwnProperty.call(paths, key)) return '';
+    const px = Math.max(8, Math.min(64, Number(size) || 16));
+    return '<svg class="shuki-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="' + px + '" height="' + px + '" ''' + _STROKE + '''>' + paths[key] + '</svg>';
+  };
+  window.shukiSetIconLabel = function(element, key, text) {
+    element.innerHTML = shukiIcon(key);
+    element.append(document.createTextNode(' ' + String(text)));
+  };
+})();
+</script>'''

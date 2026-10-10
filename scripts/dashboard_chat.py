@@ -115,14 +115,15 @@ CSS = r'''
   /* モデル選択ポップアップ（2026-08-16）: スキルボタン（[data-exec-skill]）を押した瞬間は
      まだドックが開いておらず常設チップに触れないため、ここでモデルだけ先に選ばせてから
      ドックへ実行結果を出す。選ぶと即実行＝確認ボタンを別途置かない（タップ数を増やさない）。 */
-  /* board のデスクトップ詳細パネル(#detail-panel)が z-index:1200 で中央モーダル化した
-     （2026-09-01）ため、その裏に隠れないよう、この一発実行ポップアップ・後続の対話ドック
-     （#result・#result-mini）は詳細パネルより高いレイヤーに置く。 */
-  .model-pick-overlay { position:fixed; inset:0; z-index:1300; background:#00000066;
-    display:flex; align-items:center; justify-content:center; padding:16px; }
+  /* Native modal top layer: works above meeting, preview, sidebar and other dialogs. */
+  .model-pick-overlay { position:fixed; inset:0; margin:0; border:0; box-sizing:border-box;
+    width:100%; height:100%; max-width:none; max-height:none; background:#00000066;
+    color:var(--fg); font:inherit; display:flex; align-items:center; justify-content:center; padding:16px; }
+  .model-pick-overlay::backdrop { background:transparent; }
   .model-pick-overlay[hidden] { display:none; }
   .model-pick-card { background:var(--card); border:1px solid var(--accent); border-radius:14px;
-    padding:20px 22px; box-shadow:0 8px 32px #00000055; max-width:min(360px, 88vw); text-align:center; }
+    padding:20px 22px; box-shadow:0 8px 32px #00000055; max-width:min(360px, 88vw); text-align:center;
+    box-sizing:border-box; max-height:100%; overflow:auto; }
   .mp-title { font-weight:bold; margin-bottom:14px; }
   /* 任意コメント欄（2026-09-05）: 「このタスクもう終わってたはず」「こういう方針で進めたい」等を
      実行前に添えられるようにする。フェーズA（方針提示→ユーザーの返答待ち）を素通りできる分だけ
@@ -406,11 +407,47 @@ CSS = r'''
   /* 選択肢・承認ボタン（2026-08-16）: NTFY_CHOICES を通知だけでなく対話パネル内にも出す。
      押す行為そのものを人間確認とみなし、そのジョブに限り改札フック(CLAUDE_UNMANNED)を外して
      送信する（sendChoice → /exec?confirm=1）。押した後は連打防止のため全ボタンを disable する。 */
-  .choice-btns { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
-  .choice-btn { background:var(--card); border:1px solid var(--accent); color:var(--fg);
-    border-radius:16px; padding:5px 14px; font-size:.82rem; cursor:pointer; font-family:inherit; }
-  .choice-btn:hover:not(:disabled) { background:var(--accent); color:#1a1408; }
-  .choice-btn:disabled { opacity:.45; cursor:default; }
+  /* 2026-10-10: 文言の長さで幅がバラつくピル型をやめ、クイズの選択肢（plugins/quiz/web/style.css
+     .choice-list）と同じ「全幅・左揃え・同じ高さの行」に統一。クイズページでも同じクラス名が
+     読み込まれるため、ドック側は .choice-btns 配下に限定して詳細度で勝たせる。 */
+  .choice-btns { display:flex; flex-direction:column; align-items:stretch; gap:8px; margin-top:10px; }
+  .choice-btns .choice-btn { display:flex; align-items:center; gap:10px; width:100%; min-height:44px;
+    box-sizing:border-box; padding:10px 14px; text-align:left; line-height:1.45; font:inherit;
+    font-size:.86rem; color:var(--fg); background:var(--card); border:1px solid var(--line);
+    border-radius:8px; cursor:pointer; box-shadow:none; }
+  .choice-btns .choice-btn:hover:not(:disabled) { border-color:var(--accent); background:var(--card); color:var(--fg); }
+  .choice-btns .choice-btn:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .choice-btns .choice-btn:disabled { opacity:.5; cursor:default; }
+  .choice-btns .choice-btn[hidden] { display:none; }  /* display:flex が [hidden] を上書きする罠の対策 */
+  .choice-btn .choice-text { flex:1 1 auto; min-width:0; overflow-wrap:anywhere; }
+  .choice-btn .choice-rec { flex:none; font-size:.7rem; font-weight:700; color:var(--accent);
+    border:1px solid currentColor; border-radius:999px; padding:1px 8px; white-space:nowrap; }
+  /* 選択印（NTFY_QUESTION のみ）: 丸 → 選ぶと塗りつぶし。色だけに頼らず形でも状態を示す */
+  .choice-mark { flex:none; width:16px; height:16px; border:1.5px solid var(--muted); border-radius:50%;
+    box-sizing:border-box; }
+  .choice-btns .choice-btn[aria-pressed="true"] { border-color:var(--accent);
+    box-shadow:inset 0 0 0 1px var(--accent); background:color-mix(in srgb, var(--accent) 10%, var(--card)); }
+  .choice-btn[aria-pressed="true"] .choice-mark { border-color:var(--accent);
+    background:radial-gradient(circle, var(--accent) 0 4px, transparent 4.5px); }
+  /* 複数の観点（NTFY_QUESTION）: 観点ごとに1つ選ぶ／その他に書く → まとめて送信 */
+  .choice-card { display:flex; flex-direction:column; gap:8px; background:var(--bg); border:1px solid var(--line);
+    border-radius:12px; padding:12px; }
+  .choice-card[hidden] { display:none; }
+  .choice-card-head { display:flex; align-items:baseline; gap:8px; margin-bottom:2px; }
+  .choice-card-step { font-size:.72rem; color:var(--muted); font-variant-numeric:tabular-nums; }
+  .choice-q-label { font-size:.86rem; font-weight:700; color:var(--fg); }
+  .choice-q-opts { display:flex; flex-direction:column; gap:8px; }
+  .choice-other { width:100%; box-sizing:border-box; min-height:44px; padding:10px 14px; background:var(--bg);
+    color:var(--fg); border:1px dashed var(--line); border-radius:8px; font:inherit; font-size:.86rem; }
+  .choice-other:focus { outline:none; border-style:solid; border-color:var(--accent); }
+  .choice-card-nav { display:flex; justify-content:flex-end; gap:8px; }
+  .choice-btns .choice-card-nav .choice-btn { width:auto; min-width:96px; justify-content:center; text-align:center; }
+  .choice-btns .choice-send:not(:disabled) { background:var(--accent); border-color:var(--accent);
+    color:var(--bg); font-weight:700; }
+  .choice-btns .choice-send:hover:not(:disabled) { background:var(--accent); color:var(--bg); filter:brightness(1.08); }
+  /* 履歴復旧の「更新／履歴」は選択肢でなく操作ボタンなので横並びのまま */
+  .history-status .choice-btns { flex-direction:row; flex-wrap:wrap; }
+  .history-status .choice-btns .choice-btn { width:auto; justify-content:center; }
   /* 💬 常設の丸ボタン（2026-08-13 ユーザーの投函メモ）: ホーム以外のページでは対話パネルを開く
      導線がホームの「Claude」チップにしかなく、毎回ホームへ戻る必要があった。全ページの
      右下に常時置き、押せば openChat() でその場から自由入力を始められる。ドックが開いて
@@ -520,7 +557,7 @@ HTML = r'''
         <div id="voice-settings-fields">
           <label title="Recognition and replies language">Lang <select id="voice-language-select" onchange="voiceChat.setLanguage(this.value)">
             <option value="en">EN</option><option value="ja">JA</option></select></label>
-          <span title="Voice: GPT-5.6 Luna">🔊 Luna</span>
+          <span title="Voice: GPT-5.6 Luna">__ICON_SPEAKER__ Luna</span>
           <label>Pause <select id="voice-pause"><option value="1500" selected>1.5 s</option>
             <option value="2500">2.5 s</option><option value="4000">4 s</option></select></label>
         </div>
@@ -598,7 +635,7 @@ HTML = r'''
 <button id="chat-fab" onclick="openChat('Omnipus')" title="Chat with Omnipus" aria-label="Chat with Omnipus">
   __MASCOT_SPRITE__
 </button>
-<div id="model-pick-overlay" class="model-pick-overlay" hidden
+<dialog id="model-pick-overlay" class="model-pick-overlay" aria-labelledby="model-pick-title" hidden
   onclick="if(event.target===this) cancelModelPick()">
   <div class="model-pick-card">
     <div class="mp-title" id="model-pick-title">モデルを選んで実行</div>
@@ -607,13 +644,17 @@ HTML = r'''
     <div class="mp-chips">__MODEL_CHIPS_PICK__</div>
     <button class="rbtn mp-cancel" onclick="cancelModelPick()">キャンセル</button>
   </div>
-</div>
+</dialog>
 
 '''
 
 JS = r'''
 
   function flash(el) { el.classList.add('ok'); setTimeout(() => el.classList.remove('ok'), 1200); }
+  // 画面側の見張り（初回チュートリアル等）へ、送信と返答の終わりを知らせる（2026-10-09）。
+  function shukiChatEvent(type, detail) {
+    try { window.dispatchEvent(new CustomEvent('shuki:chat', {detail: Object.assign({type: type}, detail || {})})); } catch (_) {}
+  }
   // ── スキルのヘッドレス実行（/exec → /job ポーリング → 結果パネルにチャット表示） ──
   // 各スキルボタンはここで claude -p を裏実行し、結果パネル内のチャットで続きも入力できる。
   // chatSession/chatLabel は「今アクティブなタブ」の鏡（既存コードの大半はこの2変数を
@@ -639,6 +680,7 @@ JS = r'''
   // const 宣言しているため、ドック側は名前を分けて衝突を避ける（2026-08-11）。
   const byId = id => document.getElementById(id);
   const UI_ICONS = __CHAT_ICONS__;
+  const HISTORY_TEXT = __HISTORY_LABELS__;
   const SKILL_CATALOG = __SKILL_CATALOG__;
 
   // ── 🗂 複数セッションタブ（2026-09-25 新設） ──────────────────────────────
@@ -677,6 +719,7 @@ JS = r'''
   function activeTabObj() { return TABS[activeTab] || null; }
   function tabModelStatus(tab) {
     if (!tab) return '';
+    if (tab.recovery) return HISTORY_TEXT.reconnecting;
     const model = MODEL_LABELS[tab.model] || tab.model || 'Model not reported';
     if (tab.jobId || tab.pollTimer || tab.voiceBusy) {
       return 'Responding: ' + model;
@@ -797,10 +840,10 @@ JS = r'''
     byId('result').classList.remove('err');
     byId('chat-input-row').hidden = false;  // 返答中も打てる（送信分は返答後に届く＝queueFollowup）
     clearAttach();
-    setBusy(!!t.pollTimer);
+    setBusy(tabBusy(t));
     renderTabBar();
     scrollChatToLatest();
-    if (!t.pollTimer && chatSession) startWatch(chatSession);
+    if (!tabBusy(t) && chatSession) startWatch(chatSession);
   }
 
   function closeTab(tabId, ev) {
@@ -811,6 +854,7 @@ JS = r'''
     const t = TABS[idx];
     if ((tabBusy(t) || t.voiceBusy) && !window.confirm('Close "' + (t.label || 'Chat') + '"?\nThis removes the tab from the panel. Running work will continue.')) return;
     if (t.pollTimer) clearInterval(t.pollTimer);  // 裏で走っていたポーリングだけ止める（サーバー側ジョブは止めない）
+    stopRecovery(t);
     const pane = paneOf(tabId);
     if (pane) pane.remove();
     TABS.splice(idx, 1);
@@ -829,7 +873,7 @@ JS = r'''
       btn.className = 'chat-tab' + (t === activeTabObj() ? ' active' : '') + (t.unread ? ' unread' : '');
       btn.onclick = () => switchTab(t.id);
       // タブの状態を一目で示す（ぐるぐる＝AIが思考中／チェック＝回答済み・白紙タブは何も出さない）。
-      if (t.pollTimer || t.jobId || t.voiceBusy) {
+      if (t.pollTimer || t.jobId || t.voiceBusy || t.recovery) {
         const status = document.createElement('span');
         status.className = 'ct-status';
         status.innerHTML = UI_ICONS.loading;
@@ -917,9 +961,11 @@ JS = r'''
     byId('chat-add-menu').hidden = true;
     byId('chat-add-btn').setAttribute('aria-expanded', 'false');
   }
+  let skillRunContext = null;
   function closeSkillPicker() {
     byId('skill-picker').hidden = true;
     byId('skill-btn').setAttribute('aria-expanded', 'false');
+    skillRunContext = null;
   }
   function closeChatPickers() {
     closeChatHistory();
@@ -1012,13 +1058,14 @@ JS = r'''
 
   let skillCategory = 'starter';
   const STARTER_SKILLS = ['next', 'discuss', 'plan', 'weekly-review'];
-  function toggleSkillPicker() {
+  function toggleSkillPicker(runText) {
     closeChatAddMenu();
     closeAttachmentMenu();
     const box = byId('skill-picker');
     const btn = byId('skill-btn');
     if (box.hidden) {
       closeVaultPicker();
+      skillRunContext = typeof runText === 'string' ? runText : null;
       renderSkillFilters();
       renderSkillResults();
       box.hidden = false;
@@ -1027,6 +1074,17 @@ JS = r'''
     } else {
       closeSkillPicker();
     }
+  }
+  function shukiRunHomeSkill(text) {
+    ensureActiveTab();
+    voiceChat.end();
+    exitWorkTab();
+    byId('voice-bar').hidden = true;
+    byId('chat-input-row').hidden = false;
+    byId('result').hidden = false;
+    restoreResult();
+    closeSkillPicker();
+    toggleSkillPicker(String(text || ''));
   }
   function renderSkillFilters() {
     const filters = byId('skill-filters');
@@ -1083,8 +1141,14 @@ JS = r'''
     }
   }
   function insertSkill(name) {
-    if (!SKILL_CATALOG.some(s => s.name === name)) return;
+    const skill = SKILL_CATALOG.find(s => s.name === name);
+    if (!skill) return;
+    const runText = skillRunContext;
     closeSkillPicker();
+    if (runText !== null) {
+      if (shukiPrepareSessionTab()) doExec(name, encodeURIComponent(runText), skill.label);
+      return;
+    }
     const inp = byId('chat-input');
     const names = new Set(SKILL_CATALOG.map(s => s.name));
     const previous = /^\/([a-z0-9-]+)(?:\s+|$)/.exec(inp.value);
@@ -1350,6 +1414,7 @@ JS = r'''
     byId('result-mini').classList.remove('unread');
     scrollChatToLatest();
     updateFabVisibility();
+    shukiChatEvent('opened');
   }
 
   // ドック全体を閉じる（全タブ）。個別タブだけ畳みたい時は closeTab() を使う。
@@ -1359,7 +1424,7 @@ JS = r'''
     closeChatPickers();
     voiceChat.end();
     exitWorkTab();
-    TABS.forEach(t => { if (t.pollTimer) clearInterval(t.pollTimer); });
+    TABS.forEach(t => { if (t.pollTimer) clearInterval(t.pollTimer); stopRecovery(t); });
     TABS = [];
     activeTab = 0;
     byId('chat-log').innerHTML = '';
@@ -1579,43 +1644,9 @@ JS = r'''
         })
         .catch(() => {});
     }
-    const targetTabId = activeTabObj().id;  // 読み込み中にタブを切り替えられても迷子にならないよう固定
-    const addToTarget = (role, html, text) => {  // 対象タブが閉じられていたら何もしない
-      const pane = paneOf(targetTabId);
-      if (!pane) return null;
-      const d = document.createElement('div');
-      d.className = 'chat-msg ' + role;
-      d.innerHTML = html;
-      if (typeof text === 'string') attachCopy(d, text);
-      pane.appendChild(d);
-      if (targetTabId === activeTabObj().id) d.scrollIntoView({ behavior: 'smooth', block: 'end' });
-      renderMermaidIn(d);
-      return d;
-    };
-    activePane().innerHTML = '';
     clearAttach();
     stopSpeak();
-    const loading = addMsg('assistant', UI_ICONS.loading + ' 過去の会話を読み込み中…');
-    activeTabObj().historyLoad = fetch('/history-log?session=' + encodeURIComponent(session))
-      .then(r => r.json())
-      .then(list => {
-        const pane = paneOf(targetTabId);
-        if (!pane) return false;
-        pane.innerHTML = '';
-        if (!list.length) {
-          addToTarget('assistant', '過去の会話を読み込めませんでした。');
-        } else {
-          list.forEach(m => {
-            const el = addToTarget(m.role === 'user' ? 'user' : 'assistant', mdlite(m.text), m.text);
-            if (m.role === 'assistant' && el) attachSpeak(el, m.text);
-            if (m.role === 'assistant' && el && Array.isArray(m.choices) && m.choices.length)
-              renderChoices(el, m.choices);
-          });
-        }
-        if (activeTabObj() && activeTabObj().id === targetTabId) scrollChatToLatest();
-        return list.length > 0;
-      })
-      .catch(() => { loading.textContent = '履歴の読み込みに失敗しました。'; return false; });
+    reloadTranscriptInPlace(activeTabObj());
     byId('chat-input-row').hidden = false;
     byId('result').scrollIntoView({ behavior: 'smooth' });
     byId('chat-input').focus();
@@ -1756,22 +1787,45 @@ JS = r'''
   // ドックが開く前にモデルを選ばせるにはここで一度止めるしかない。選ぶ＝実行（確認は挟まない）。
   let pendingExec = null;
 
+  function showModelPick() {
+    const dialog = byId('model-pick-overlay');
+    dialog.hidden = false;
+    if (!dialog.open) dialog.showModal();
+    const button = dialog.querySelector('.mchip-pick.active') || dialog.querySelector('.mchip-pick');
+    if (button) button.focus({preventScroll: true});
+  }
+
+  function closeModelPick() {
+    const dialog = byId('model-pick-overlay');
+    dialog.close();
+    dialog.hidden = true;
+  }
+
+  byId('model-pick-overlay').addEventListener('cancel', event => {
+    event.preventDefault();
+    cancelModelPick();
+  });
+  // Escape belongs to the top dialog; do not also dismiss the source panel.
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && byId('model-pick-overlay').open) event.stopImmediatePropagation();
+  }, true);
+
   function exec(skill, textEnc, label) {  // textEnc は URL エンコード済み。data-exec-skill から呼ばれる入口
     pendingExec = { skill, textEnc, label };
     byId('model-pick-title').textContent = (label || skill) + ' を実行 — モデルを選択';
     byId('model-pick-comment').value = '';  // 前回の入力を持ち越さない
     document.querySelectorAll('.mchip-pick').forEach(b => b.classList.toggle('active', b.dataset.model === lastAutoModel));
-    byId('model-pick-overlay').hidden = false;
+    showModelPick();
     return false;
   }
 
   function cancelModelPick() {
-    byId('model-pick-overlay').hidden = true;
+    closeModelPick();
     pendingExec = null;
   }
 
   function pickModel(m) {
-    byId('model-pick-overlay').hidden = true;
+    closeModelPick();
     const p = pendingExec;
     const comment = byId('model-pick-comment').value.trim();
     pendingExec = null;
@@ -1793,8 +1847,9 @@ JS = r'''
   function pickModelThen(label, run) {
     pendingExec = { run: run, label: label };
     byId('model-pick-title').textContent = (label || '実行') + ' — モデルを選択';
+    byId('model-pick-comment').value = '';
     document.querySelectorAll('.mchip-pick').forEach(b => b.classList.toggle('active', b.dataset.model === lastAutoModel));
-    byId('model-pick-overlay').hidden = false;
+    showModelPick();
     return false;
   }
 
@@ -1855,7 +1910,7 @@ JS = r'''
   // まとめて1発言として送る。割り込みたい時は ⏹（＝吹き出しの「止めて今すぐ送る」）で現在の
   // ターンを止めれば、stopped の時点で待ち行列が送られる。エラーで続きを送れない時は
   // 送信せずに入力欄へ戻す（黙って消さない）。 ──
-  function tabBusy(tab) { return !!(tab && (tab.pollTimer || tab.jobId || tab.starting)); }
+  function tabBusy(tab) { return !!(tab && (tab.pollTimer || tab.jobId || tab.starting || tab.recovery)); }
 
   function queueFollowup(tab, text, sendText, attHtml) {
     const qid = 'q' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
@@ -1982,6 +2037,7 @@ JS = r'''
     addMsg('user', attHtml + mdlite(text || '(添付のみ)'), text || '(添付のみ)');
     const msg = addMsg('assistant', UI_ICONS.loading + ' 実行中…');
     startFollowup(tab, sendText, msg);
+    shukiChatEvent('sent');
     return false;
   }
 
@@ -2187,6 +2243,7 @@ JS = r'''
     const tid = forTabId || (activeTabObj() && activeTabObj().id);
     const tab = tabById(tid);
     if (!tab) return;  // 対象タブが既に閉じられていた
+    stopRecovery(tab);
     const isActive = () => activeTabObj() === tab;
     if (isActive()) stopWatch();  // ntfy監視中に自分でポーリングを引き継ぐ場合、二重ポーリングを避ける
     if (tab.pollTimer) clearInterval(tab.pollTimer);
@@ -2208,6 +2265,11 @@ JS = r'''
           if (isActive()) setBusy(false);
           recoverFromLostJob(msgEl, tab.id);
           return;
+        }
+        if (d.session && d.session !== tab.session) {
+          tab.session = d.session;
+          if (isActive()) chatSession = d.session;
+          saveDockState();  // Keep the first turn resumable before its reply finishes.
         }
         setTabModel(tab, d.model);
         applySessionTabRequest(d, tab).catch(() => {});
@@ -2243,6 +2305,7 @@ JS = r'''
           tab.session = d.session || tab.session;
           if (isActive()) { byId('result').classList.add('err'); chatSession = tab.session; byId('chat-input-row').hidden = false; byId('chat-input').focus(); }
           returnQueue(tab);  // エラー後に待ち行列を流すと同じ失敗を重ねるので入力欄へ戻す
+          shukiChatEvent('reply', {status: 'error'});
           return;
         }
         if (d.status === 'stopped') {
@@ -2257,6 +2320,7 @@ JS = r'''
             if (isActive()) { chatSession = d.session; byId('chat-input-row').hidden = false; byId('chat-input').focus(); startWatch(d.session); }
           }
           flushQueue(tab);  // ⏹で止めた＝割り込み。待っていた発言をすぐ送る
+          shukiChatEvent('reply', {status: 'stopped'});
           return;
         }
         if (isActive() && window.SFX) SFX.chat_done();
@@ -2283,171 +2347,302 @@ JS = r'''
           }
         }
         flushQueue(tab);  // 返答中に送られていた発言をここで届ける
+        shukiChatEvent('reply', {status: 'done'});
       }).catch(() => {});  // 一時的な通信失敗は次のポーリングに任せる
     }, 900);  // 途中経過(partial)を見せたいので短め（2026-07-27）
   }
 
-  // サーバー再起動でJOB状態を見失った時のフォールバック（2026-08-17、2026-08-24 リトライ化）。
-  // dashboard_server.py の claude -p は素の subprocess.Popen で起動しており（プロセスグループ
-  // 指定なし）、Windowsでは親(HTTPサーバー)が Stop-Process 等で落ちても子(claude本体)は道連れに
-  // ならず実行を続ける。つまりサーバー再起動の瞬間はまだ応答が書き終わっていないことが多い
-  // （特にツール呼び出しを何度も挟む長いターン）。旧実装は /history-log を1回だけ見て末尾が
-  // assistant でなければ即諦めていたため、裏で応答が完成しても取りこぼし、
-  // 「🔄再読み込み」ボタンを押しても sessionStorage の古いスナップショットを描き直すだけで
-  // 新しい内容は出ず（saveDockState の保存タイミングは応答完了前）、結局ホームの対話履歴から
-  // 手動で開き直すしかなかった。ここでは「今の吹き出しを含めて表示済みの件数」を基準に、
-  // transcript（/history-log）がその件数に追いつく＝応答完了まで数秒おきに待ち続ける。
-  function recoverFromLostJob(msgEl, forTabId) {
-    const tab = tabById(forTabId) || activeTabObj();
-    if (!tab) return;
-    const isActive = () => activeTabObj() === tab;
-    const session = tab.session;
-    const RECOVER_INTERVAL_MS = 3000;
-    const RECOVER_MAX_MS = 5 * 60 * 1000;  // 多段ツール呼び出しの長考でも待てるよう5分
-    const startTs = Date.now();
-    // 今表示中の吹き出し（このmsgEl自身＝まだ埋まっていない応答枠）を含めた件数。
-    // /history-log の件数がこれに追いついた時、末尾のassistantが「今回の本物の応答」だと分かる
-    // （追いつく前に見えるassistant末尾は、まだ書き終わっていない一つ前のターンの可能性がある）。
-    const pane = paneOf(tab.id);
-    const knownCount = pane ? pane.querySelectorAll('.chat-msg').length : 0;
-    function giveUp() {
-      if (isActive()) byId('result').classList.add('err');
-      msgEl.innerHTML = 'サーバー再起動から時間が経ちましたが実行結果を確認できませんでした。';
-      // location.reload() は sessionStorage の古いスナップショット(saveDockState)を描き直す
-      // だけで応答完了後の内容を反映しない。resumeHistory() は /history-log を直接取り直す
-      // ので、こちらを直接呼ぶボタンにする（2026-08-24。ホーム→対話履歴から開き直すのと同じ経路）。
-      const btns = document.createElement('div');
-      btns.className = 'choice-btns';
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'choice-btn';
-      b.innerHTML = UI_ICONS.refresh + ' 会話を読み直す';
-      b.onclick = () => { switchTab(tab.id); resumeHistory(session, tab.label, null, true); };
-      btns.appendChild(b);
-      msgEl.appendChild(btns);
-      if (isActive()) byId('chat-input-row').hidden = false;
-      returnQueue(tab);
+  // All history recovery reads stay bound to their original conversation tab.
+  function historyStatus(tab, key, retry) {
+    const pane = tab && paneOf(tab.id);
+    if (!pane || tabById(tab.id) !== tab) return;
+    let status = pane.querySelector('.history-status');
+    if (!status) {
+      status = document.createElement('div');
+      status.className = 'history-status stop-note';
+      status.setAttribute('role', 'status');
+      pane.appendChild(status);
     }
-    if (!session) { giveUp(); return; }
-    msgEl.innerHTML = UI_ICONS.loading + ' サーバーが再起動されました。実行が裏で続いている'
-      + '可能性があるため結果を待っています…';
-    function attempt() {
-      fetch('/history-log?session=' + encodeURIComponent(session)).then(r => r.json()).then(msgs => {
-        const last = msgs && msgs.length ? msgs[msgs.length - 1] : null;
-        if (last && last.role === 'assistant' && msgs.length >= knownCount) {
-          if (isActive()) byId('result').classList.remove('err');
-          msgEl.innerHTML = mdlite(last.text);
-          renderMermaidIn(msgEl);
-          attachSpeak(msgEl, last.text);
-          if (!isActive()) tab.unread = true;
-          if (isActive()) {
-            byId('chat-input-row').hidden = false;
-            byId('chat-input').focus();
-            if (minimized) miniUnread = true;
-            if (autoSpeak) speak(last.text);  // 🔊 ON なら復旧できた返答も自動読み上げ
-            startWatch(session);
-          }
-          renderTabBar();
-          flushQueue(tab);
-          return;
+    status.replaceChildren(document.createTextNode(HISTORY_TEXT[key]));
+    if (retry) {
+      const actions = document.createElement('div');
+      actions.className = 'choice-btns';
+      for (const [label, action] of [[HISTORY_TEXT.refresh, () => refetchDock(tab)],
+                                     [HISTORY_TEXT.history, toggleChatHistory]]) {
+        const button = document.createElement('button');
+        button.type = 'button'; button.className = 'choice-btn';
+        button.textContent = label; button.onclick = action;
+        actions.appendChild(button);
+      }
+      status.appendChild(actions);
+    }
+    if (activeTabObj() === tab) scrollChatToLatest();
+  }
+
+  function appendHistoryMessage(tab, message) {
+    const el = document.createElement('div');
+    el.className = 'chat-msg ' + message.role;
+    el.innerHTML = mdlite(message.text);
+    attachCopy(el, message.text);
+    paneOf(tab.id).appendChild(el);
+    renderMermaidIn(el);
+    if (message.role === 'assistant') {
+      attachSpeak(el, message.text);
+      if (Array.isArray(message.choices) && message.choices.length) renderChoices(el, message.choices);
+    }
+    return el;
+  }
+
+  function reloadTranscriptInPlace(tab, options) {
+    tab = tab || activeTabObj(); options = options || {};
+    if (!tab || tabById(tab.id) !== tab) return Promise.resolve(false);
+    if (!tab.session) { historyStatus(tab, 'noSession', true); return Promise.resolve(false); }
+    if (tab.historyLoading) return tab.historyLoad;
+    const session = tab.session, jobId = tab.jobId;
+    tab.historyLoading = true; tab.historyError = false;
+    tab.lastHistoryCheck = Date.now();
+    if (!options.quiet) historyStatus(tab, 'loading');
+    tab.historyLoad = fetch('/history-log?session=' + encodeURIComponent(session), {cache: 'no-store'})
+      .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(list => {
+        const pane = paneOf(tab.id);
+        if (!pane || tabById(tab.id) !== tab || tab.session !== session ||
+            tab.jobId !== jobId || tab.starting) return false;
+        if (!Array.isArray(list) || list.some(m => !m || !['user', 'assistant'].includes(m.role) ||
+                                                  typeof m.text !== 'string')) throw new Error('Invalid history');
+        if (!list.length) {
+          if (!options.recovering) historyStatus(tab, 'empty', true);
+          return false;
         }
-        if (Date.now() - startTs > RECOVER_MAX_MS) { giveUp(); return; }
-        setTimeout(attempt, RECOVER_INTERVAL_MS);
-      }).catch(() => {
-        if (Date.now() - startTs > RECOVER_MAX_MS) { giveUp(); return; }
-        setTimeout(attempt, RECOVER_INTERVAL_MS);
-      });
+        if (options.recovering) {
+          const lastUser = list.filter(m => m.role === 'user').pop();
+          if (!lastUser || lastUser.text.trim() !== options.pendingText.trim() ||
+              list[list.length - 1].role !== 'assistant') return false;
+        }
+        const queued = Array.from(pane.querySelectorAll('.chat-msg.queued'));
+        pane.replaceChildren();
+        list.forEach(m => appendHistoryMessage(tab, m));
+        queued.forEach(el => pane.appendChild(el));
+        if (activeTabObj() === tab) {
+          byId('result').classList.remove('err');
+          byId('chat-input-row').hidden = false;
+          scrollChatToLatest();
+        }
+        saveDockState();
+        return true;
+      })
+      .catch(() => {
+        if (tabById(tab.id) === tab) {
+          tab.historyError = true; tab.historyPaused = true;
+          if (!options.recovering) historyStatus(tab, 'failed', true);
+        }
+        return false;
+      })
+      .finally(() => { tab.historyLoading = false; });
+    return tab.historyLoad;
+  }
+
+  function stopRecovery(tab) {
+    if (!tab) return;
+    if (tab.recovery) clearTimeout(tab.recovery.timer);
+    tab.recovery = null; tab.recoveryText = '';
+  }
+
+  function recoverFromLostJob(msgEl, forTabId) {
+    const tab = tabById(forTabId);
+    if (!tab || tab.recovery) return;
+    const users = paneOf(tab.id).querySelectorAll('.chat-msg.user:not(.queued)');
+    const lastUser = users[users.length - 1];
+    const pendingText = tab.recoveryText || (lastUser && lastUser.dataset.copyText) || '';
+    const recovery = {timer: null, failures: 0, deadline: Date.now() + 5 * 60 * 1000};
+    tab.recovery = recovery; tab.recoveryText = pendingText;
+    historyStatus(tab, 'waiting'); renderTabBar();
+    function finish(key) {
+      stopRecovery(tab); tab.historyPaused = true;
+      historyStatus(tab, key, true);
+      returnQueue(tab);
+      if (activeTabObj() === tab) setBusy(false);
+      renderTabBar(); saveDockState();
+    }
+    if (!tab.session || !pendingText) { finish('noSession'); return; }
+    async function attempt() {
+      if (tabById(tab.id) !== tab || tab.recovery !== recovery) return;
+      const loaded = await reloadTranscriptInPlace(tab, {quiet: true, recovering: true, pendingText});
+      if (tabById(tab.id) !== tab || tab.recovery !== recovery) return;
+      if (loaded) {
+        stopRecovery(tab); tab.historyPaused = false;
+        if (activeTabObj() === tab) { setBusy(false); startWatch(tab.session); }
+        else tab.unread = true;
+        renderTabBar(); saveDockState(); flushQueue(tab);
+        return;
+      }
+      recovery.failures = tab.historyError ? recovery.failures + 1 : 0;
+      if (recovery.failures >= 2) { finish('failed'); return; }
+      if (Date.now() >= recovery.deadline) { finish('unavailable'); return; }
+      recovery.timer = setTimeout(attempt, 3000);
     }
     attempt();
   }
 
-  // ── 🔄 再取得（2026-08-30 ユーザーの投函メモ）──
-  // 通信が切れて応答が吹き出しに出ないまま poll() が静かに止まる経路（モバイルの
-  // バックグラウンドで setInterval が凍結／タブ復元時に jobId を持ち越せなかった／
-  // 一時的な通信失敗が長引いた）では、これまでページ全体をリロードして対話履歴から
-  // 開き直すしか手が無かった（recoverFromLostJob はサーバー再起動を検知できた時だけ）。
-  // このボタンは「今ドックで開いている会話」に限定して最新状態を取り直す：
-  //   ① まずサーバーにこのセッションの実行中ジョブを問い合わせ、生きていれば poll() を張り直す
-  //   ② ジョブが把握されていなければ /history-log からログ全文を取り直して描き直す
-  // どちらもページ遷移なし。session が無い＝取り直す対象が無い時は何もしない。
-  function refetchDock() {
-    const tab = activeTabObj();
+  function refetchDock(tab, automatic) {
+    tab = tab || activeTabObj();
+    if (!tab || tabById(tab.id) !== tab || tab.refreshing || tab.starting || tab.voiceBusy) return;
+    if (automatic && (tab.historyPaused || Date.now() - (tab.lastHistoryCheck || 0) < 5000)) return;
     const btn = byId('refetch-btn');
-    if (btn && btn.disabled) return;
-    const jobId = activeTabObj() ? activeTabObj().jobId : '';
-    if (!chatSession && !jobId) return;  // まだ会話が始まっていない（openChat 直後など）
-    if (btn) { btn.disabled = true; setTimeout(() => { btn.disabled = false; }, 4000); }
-    const q = jobId ? ('id=' + encodeURIComponent(jobId))
-                     : ('session=' + encodeURIComponent(chatSession));
-    fetch('/job?' + q).then(r => r.ok ? r.json() : null).then(d => {
-      if (activeTabObj() !== tab) return;
-      if (d && d.id && d.status) {
-        // ジョブがまだ生きている（running でも done 直後でも）。末尾の応答枠へ poll を張り直す。
-        const last = activePane().lastElementChild;
-        const msgEl = (last && last.classList.contains('assistant'))
-          ? last : addMsg('assistant', UI_ICONS.loading + ' 最新の状態を取り直しています…');
-        byId('result').classList.remove('err');
-        setBusy(d.status === 'running');
-        poll(d.id, msgEl, tab.id, d.model || '');
-        return;
-      }
-      reloadTranscriptInPlace();  // サーバーはこのジョブを把握していない → transcript を取り直す
-    }).catch(() => { if (activeTabObj() === tab) reloadTranscriptInPlace(); });
+    if (!automatic && btn) btn.disabled = true;
+    tab.historyPaused = false;
+    const jobId = tab.jobId, session = tab.session;
+    const query = jobId ? 'id=' + encodeURIComponent(jobId) : 'session=' + encodeURIComponent(session);
+    tab.refreshing = (session || jobId ? fetch('/job?' + query, {cache: 'no-store'})
+      .then(r => { if (r.status === 404) return null; if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      : Promise.resolve(null))
+      .then(d => {
+        if (tabById(tab.id) !== tab || tab.session !== session || tab.jobId !== jobId) return false;
+        if (d && d.id && d.status) {
+          if (d.session) { tab.session = d.session; if (activeTabObj() === tab) chatSession = d.session; }
+          const pane = paneOf(tab.id), last = pane.lastElementChild;
+          const msgEl = last && last.classList.contains('assistant') ? last
+            : appendHistoryMessage(tab, {role: 'assistant', text: HISTORY_TEXT.loading});
+          poll(d.id, msgEl, tab.id, d.model || '');
+          return true;
+        }
+        if (jobId || tab.recovery) {
+          if (tab.pollTimer) clearInterval(tab.pollTimer);
+          tab.pollTimer = null; tab.jobId = '';
+          const pendingText = tab.recoveryText;
+          stopRecovery(tab); tab.recoveryText = pendingText;
+          recoverFromLostJob(null, tab.id);
+          return false;
+        }
+        return reloadTranscriptInPlace(tab, {quiet: !!automatic});
+      })
+      .catch(() => { tab.historyPaused = true; historyStatus(tab, 'failed', true); return false; })
+      .finally(() => { tab.refreshing = null; if (!automatic && btn) btn.disabled = false; });
+    return tab.refreshing;
   }
 
-  function reloadTranscriptInPlace() {
-    if (!chatSession) {  // session が無いと /history-log を引けない（取り直せない）
-      byId('result').classList.add('err');
-      addMsg('assistant', 'この会話は再取得できません（セッションIDがありません）。ホームの対話履歴から開き直してください。');
-      byId('chat-input-row').hidden = false;
+  function refreshReturnedConversation() {
+    const tab = activeTabObj();
+    if (!document.hidden && !byId('result').hidden && !voiceChat.active && tab && !tabBusy(tab)) {
+      refetchDock(tab, true);
+      if (tab.session) startWatch(tab.session);
+    }
+  }
+
+  // Human approval choices keep their existing explicit submission path.
+  const CHOICE_LABELS = __CHOICE_LABELS__;
+  // 末尾の「（推奨）/(Recommended)」は文言から外してバッジにする。送信する値は元の文言のまま。
+  const CHOICE_REC_RE = /\s*[（(]\s*(推奨|おすすめ|recommended)\s*[)）]\s*$/i;
+  function fillChoice(b, opt, withMark) {
+    if (withMark) {
+      const mark = document.createElement('span');
+      mark.className = 'choice-mark';
+      mark.setAttribute('aria-hidden', 'true');
+      b.appendChild(mark);
+    }
+    const text = document.createElement('span');
+    text.className = 'choice-text';
+    text.textContent = opt.replace(CHOICE_REC_RE, '');
+    b.appendChild(text);
+    if (CHOICE_REC_RE.test(opt)) {
+      const rec = document.createElement('span');
+      rec.className = 'choice-rec';
+      rec.textContent = CHOICE_LABELS.recommended;
+      b.appendChild(rec);
+    }
+  }
+  function renderQuestions(msgEl, questions) {
+    // 1判断＝1枚のカード。選ぶ（または「その他」に書く）と「次へ」が押せ、最後のカードで「まとめて送信」。
+    const box = document.createElement('div');
+    box.className = 'choice-btns choice-qs';
+    const answers = questions.map(() => '');
+    let step = 0;
+    const cards = questions.map((q, i) => {
+      const card = document.createElement('div');
+      card.className = 'choice-card';
+      card.setAttribute('role', 'group');
+      card.setAttribute('aria-label', q.label || '');
+      const head = document.createElement('div');
+      head.className = 'choice-card-head';
+      const count = document.createElement('span');
+      count.className = 'choice-card-step';
+      count.textContent = (i + 1) + ' / ' + questions.length;
+      const label = document.createElement('span');
+      label.className = 'choice-q-label';
+      label.textContent = q.label || '';
+      head.append(count, label);
+      const row = document.createElement('div');
+      row.className = 'choice-q-opts';
+      const other = document.createElement('input');
+      other.type = 'text';
+      other.className = 'choice-other';
+      other.maxLength = 300;
+      other.placeholder = CHOICE_LABELS.other;
+      const buttons = (q.options || []).map(opt => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'choice-btn';
+        fillChoice(b, opt, true);
+        b.setAttribute('aria-pressed', 'false');
+        b.onclick = () => {
+          buttons.forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+          other.value = '';
+          answers[i] = opt;
+          refresh();
+        };
+        return b;
+      });
+      other.addEventListener('input', () => {
+        buttons.forEach(x => x.setAttribute('aria-pressed', 'false'));
+        answers[i] = other.value;
+        refresh();
+      });
+      other.addEventListener('keydown', e => { if (e.key === 'Enter' && !next.disabled) next.click(); });
+      row.append(...buttons);
+      card.append(head, row, other);
+      return card;
+    });
+    const nav = document.createElement('div');
+    nav.className = 'choice-card-nav';
+    const back = document.createElement('button');
+    back.type = 'button';
+    back.className = 'choice-btn choice-back';
+    back.textContent = CHOICE_LABELS.back;
+    const next = document.createElement('button');
+    next.type = 'button';
+    next.className = 'choice-btn choice-send';
+    nav.append(back, next);
+    function refresh() {
+      cards.forEach((c, i) => { c.hidden = i !== step; });
+      back.hidden = step === 0;
+      const last = step === questions.length - 1;
+      next.textContent = last ? CHOICE_LABELS.send : CHOICE_LABELS.next;
+      next.disabled = !answers[step].trim();
+    }
+    back.onclick = () => { step -= 1; refresh(); };
+    next.onclick = () => {
+      if (step < questions.length - 1) { step += 1; refresh(); return; }
+      const text = questions.map((q, i) => (q.label ? q.label + ': ' : '') + answers[i].trim()).join('\n');
+      box.querySelectorAll('input').forEach(x => { x.disabled = true; });
+      sendChoice(text, box);
+    };
+    box.append(...cards, nav);
+    refresh();
+    msgEl.appendChild(box);
+  }
+
+  function renderChoices(msgEl, choices) {
+    if (choices.length && choices[0] && typeof choices[0] === 'object') {
+      renderQuestions(msgEl, choices);
       return;
     }
-    if (activeTabObj() && activeTabObj().pollTimer) { clearInterval(activeTabObj().pollTimer); activeTabObj().pollTimer = null; }
-    const log = activePane();
-    const prevCount = log.querySelectorAll('.chat-msg').length;
-    const marker = addMsg('assistant', UI_ICONS.loading + ' 最新の状態を取り直しています…');
-    fetch('/history-log?session=' + encodeURIComponent(chatSession))
-      .then(r => r.json())
-      .then(list => {
-        log.innerHTML = '';
-        if (!list || !list.length) {
-          addMsg('assistant', '会話ログを取得できませんでした。少し待ってからもう一度試してください。');
-          byId('chat-input-row').hidden = false;
-          return;
-        }
-        list.forEach(m => {
-          const el = addMsg(m.role === 'user' ? 'user' : 'assistant', mdlite(m.text), m.text);
-          if (m.role === 'assistant') attachSpeak(el, m.text);
-        });
-        setBusy(false);
-        byId('result').classList.remove('err');
-        byId('chat-input-row').hidden = false;
-        byId('chat-input').focus();
-        const lastMsg = list[list.length - 1];
-        if (log.querySelectorAll('.chat-msg').length > prevCount && lastMsg.role === 'assistant') {
-          if (window.SFX) SFX.chat_done();               // 取り直して応答が増えた＝完了通知と同じ扱い
-          if (minimized) { miniUnread = true; updateMiniBar(false); }
-          if (autoSpeak) speak(lastMsg.text);
-        }
-        startWatch(chatSession);  // 以後 ntfy 経由の返信も拾えるようにしておく
-      })
-      .catch(e => {
-        marker.textContent = '取り直しに失敗しました: ' + e;
-        byId('chat-input-row').hidden = false;
-      });
-  }
-
-  // ── 選択肢・承認ボタン（2026-08-16）: NTFY_CHOICES を対話パネル内にも表示。ボタンを押す
-  // 行為そのものを人間確認とみなし、そのジョブに限り改札フック(CLAUDE_UNMANNED)を外して送信
-  // する（confirm=1）。自由入力のテキスト送信（sendFollowup）は対象外のまま。 ──
-  function renderChoices(msgEl, choices) {
     const box = document.createElement('div');
     box.className = 'choice-btns';
     choices.forEach(c => {
       const b = document.createElement('button');
       b.type = 'button';
       b.className = 'choice-btn';
-      b.textContent = c;
+      fillChoice(b, c, false);
       b.onclick = () => sendChoice(c, box);
       box.appendChild(b);
     });
@@ -2542,8 +2737,10 @@ JS = r'''
     // 誤検知して d.prompt（サーバーがLLM用に合成した内部プロンプト全文。作業状態のJSON
     // 付き）をそのままユーザー発言として吹き出しに二重表示していた（画面ロック→復帰の
     // たびにこの誤検知が起きていた）。
-    else if (chatSession && !voiceChat.active && !(activeTabObj() && activeTabObj().pollTimer)) startWatch(chatSession);
+    else refreshReturnedConversation();
   });
+  window.addEventListener('online', refreshReturnedConversation);
+  window.addEventListener('focus', refreshReturnedConversation);
 
   // ── ドックを開く入口（クリック委譲・2026-08-11 にホーム側のリスナから分離） ──
   // どのページからでもスキル実行・チャット開始・履歴再開ができるよう、ドック自身が
@@ -2614,6 +2811,7 @@ JS = r'''
         return { id: t.id, session: t.session, label: t.label, model: t.model, log: log,
                  jobId: t.pollTimer ? t.jobId : '', unread: t.unread,  // 応答待ちのまま離脱したか
                  watchLastJobId: t.watchLastJobId, queue: t.queue || [],
+                 recoveryText: t.recoveryText || '', historyPaused: !!t.historyPaused,
                  sessionTabsReceipt: t.sessionTabsReceipt };  // Do not reopen handled actions after reload.
       });
       sessionStorage.setItem(DOCK_KEY, JSON.stringify({
@@ -2650,6 +2848,7 @@ JS = r'''
       t.watchLastJobId = st.watchLastJobId || (saved.length === 1 ? (s.watchLastJobId || '') : '');
       t.sessionTabsReceipt = st.sessionTabsReceipt;
       t.queue = Array.isArray(st.queue) ? st.queue : [];
+      t.historyPaused = !!st.historyPaused;
       return t;
     });
     activeTab = Math.min(Math.max(s.activeTab || 0, 0), TABS.length - 1);
@@ -2682,7 +2881,15 @@ JS = r'''
     // 応答待ちのまま遷移してきたタブがあれば、それぞれ自分のペインでポーリングを再開する
     // （非アクティブなタブぶんも裏で継続。setBusy 等の共通UIは poll() 内で isActive 判定して触る）。
     TABS.forEach((t, i) => {
-      if (!saved[i].jobId) return;
+      if (saved[i].recoveryText) {
+        t.recoveryText = saved[i].recoveryText;
+        recoverFromLostJob(null, t.id);
+        return;
+      }
+      if (!saved[i].jobId) {
+        if (t.session && !t.historyPaused) reloadTranscriptInPlace(t, {quiet: true});
+        return;
+      }
       const pane = paneOf(t.id);
       const msgs = pane ? pane.querySelectorAll('.chat-msg.assistant') : [];
       const msgEl = msgs.length ? msgs[msgs.length - 1]
@@ -2691,7 +2898,7 @@ JS = r'''
       if (msgEl) poll(saved[i].jobId, msgEl, t.id, t.model);
     });
     TABS.forEach(t => { if (!tabBusy(t)) flushQueue(t); });  // 遷移中に返答が終わっていた分
-    if (!(activeTabObj() && activeTabObj().jobId) && chatSession) {
+    if (!tabBusy(activeTabObj()) && chatSession) {
       startWatch(chatSession);  // ntfy経由の返信を拾えるようにしておく
     }
     updateFabVisibility();
@@ -2758,7 +2965,7 @@ JS = r'''
       [...sel.options].forEach(opt => {
         if (opt.dataset.baseLabel === undefined) opt.dataset.baseLabel = opt.textContent;
         const reason = riskReason(accounts, opt.value);
-        opt.textContent = (reason ? '⚠ ' : '') + opt.dataset.baseLabel;
+        opt.textContent = opt.dataset.baseLabel + (reason ? ' — unavailable' : '');
         if (opt.value === sel.value && reason) selReason = reason;
       });
       sel.classList.toggle('mchip-risk', !!selReason);
@@ -2766,9 +2973,20 @@ JS = r'''
     }
   }
 
-  fetch('/usage-accounts').then(r => r.json()).then(updateModelRisk).catch(() => {});
+  // サイドバーの使用量パネルもこの1回の取得を使い回す（連続で叩くと 429 になる API のため二重に取らない）
+  window.shukiUsageAccounts = fetch('/usage-accounts').then(r => r.json().then(d => {
+    if (!r.ok) throw new Error((d && d.error) || 'HTTP ' + r.status);
+    return d;
+  }));
+  window.shukiUsageAccounts.then(updateModelRisk).catch(() => {});
+  window.addEventListener('shuki:usage-updated', event => updateModelRisk(event.detail));
 
 '''
+
+
+# 複数の観点の選択肢（NTFY_QUESTION）の文言。dock_html() が訳して JS の CHOICE_LABELS に埋め込む。
+CHOICE_LABELS = {"other": "その他（自由に書く）", "send": "まとめて送信", "next": "次へ", "back": "戻る",
+                 "recommended": "推奨"}
 
 
 def assets_head():
@@ -2842,6 +3060,18 @@ def dock_html():
     voice_js = Path(__file__).with_name("dashboard_voice.js").read_text(encoding="utf-8")
     return html_out + "\n<script>\n" + shuki_i18n.tt_js_ui(voice_js, ctx="chat") + "\n" + (shuki_i18n.tt_js_ui(JS, ctx="chat")
         .replace("__MODEL_LABELS__", labels)
+        .replace("__HISTORY_LABELS__", json.dumps({k: shuki_i18n.t(v, ctx="chat") for k, v in {
+            "loading": "会話を読み込み中…",
+            "reconnecting": "再接続中…",
+            "waiting": "再接続中… 表示中のメッセージはそのまま残ります。",
+            "empty": "保存された履歴はまだ取得できません。表示中のメッセージは残っています。",
+            "failed": "履歴を読み込めませんでした。表示中のメッセージは残っています。",
+            "unavailable": "返答はまだ確認できません。更新するともう一度確認できます。",
+            "noSession": "この会話の保存先はまだ確認できません。履歴から保存済みの会話を選べます。",
+            "refresh": "更新", "history": "履歴",
+        }.items()}, ensure_ascii=False).replace("<", "\\u003c"))
+        .replace("__CHOICE_LABELS__", json.dumps({k: shuki_i18n.t(v, ctx="chat") for k, v in CHOICE_LABELS.items()},
+                                                 ensure_ascii=False).replace("<", "\\u003c"))
         .replace("__AUTO_MODEL_INITIAL_MODEL__", json.dumps(current))
         .replace("__MODEL_EFFORT__", json.dumps(model_effort, ensure_ascii=False))
         .replace("__MODEL_RISK_WINDOW__", MODEL_RISK_WINDOW_JSON)
@@ -3055,7 +3285,14 @@ const voiceChat = new VoiceConversation({
     else localStorage.removeItem('voiceWork');
   },
   speak: (text, language = 'en', force = false) => { if (autoSpeak || force) speakVoice(text, language); },
-  stopSpeak
+  stopSpeak,
+  // 音声会話から対話型ブリーフィングへ（2026-10-08）。doExec が音声会話を閉じて保存済みの
+  // 読み上げ設定へ戻すので、その後で読み上げを ON にする（このセッションだけ・保存はしない）。
+  catchup: () => {
+    doExec('catchup', '', 'キャッチアップ');
+    autoSpeak = true;
+    byId('tts-toggle').classList.add('on');
+  }
 });
 function toggleVoiceConversation() {
   if (voiceChat.active) { voiceChat.end(); return; }

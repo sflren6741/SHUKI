@@ -20,6 +20,7 @@ import shuki_paths
 
 INTERVAL = 900
 TIMEOUT = 12
+STDIO_TIMEOUT = 45
 WARNING = 7 * 86400
 LIMIT = 1024 * 1024
 STATE_PATH = shuki_paths.code_store("core/mcp-health.json")
@@ -320,7 +321,7 @@ def probe_stdio(cfg, cwd):
             pass
 
     threading.Thread(target=reader, daemon=True).start()
-    deadline = time.monotonic() + TIMEOUT
+    deadline = time.monotonic() + STDIO_TIMEOUT
 
     def send(method, identity=None, params=None):
         message = {"jsonrpc": "2.0", "method": method}
@@ -543,6 +544,7 @@ class Monitor:
             else:
                 self.state.pop("_inventory", None)
             output = []
+            service_alerts = {}
             for row in rows:
                 key = row["id"]
                 state = self.state.setdefault(key, {})
@@ -575,30 +577,49 @@ class Monitor:
                                        None if public.get("refreshable") else public.get("access_expires")) if x]
                 expiry = min(expiries) if expiries else None
                 alert = ""
+                alert_key = ""
                 if row["enabled"] and not paused:
                     if public.get("auth_problem"):
                         alert = "Credentials require attention. Reconnect in your MCP client."
+                        alert_key = "auth_required"
                     elif public["health"] in {"auth_required", "rate_limited", "unavailable"}:
-                        alert = public.get("detail", "Connection unavailable.")
+                        # A single startup timeout is evidence in Settings, not yet a blocker.
+                        if public["health"] != "unavailable" or state.get("stopped") or state.get("failures", 0) >= 2:
+                            alert = public.get("detail", "Connection unavailable.")
+                            alert_key = public["health"]
                     elif expiry and expiry <= now + WARNING:
                         alert = "Credential expiry reminder has passed." if expiry <= now else "Credentials expire within seven days."
+                        alert_key = ("expired:" if expiry <= now else "expiring:") + state.get("reminder", "")
                 public["expiry_state"] = "expired" if expiry and expiry <= now else "expiring" if expiry and expiry <= now + WARNING else "unknown" if not expiry else "valid"
                 public["expires_at"] = expiry
                 if alert:
-                    fingerprint = hashlib.sha256((alert + str(expiry)).encode()).hexdigest()
+                    service_alerts.setdefault(row["name"].casefold(), []).append((alert_key, row["runtime"], alert))
+                output.append(public)
+            for group in group_connections(output):
+                state = self.state.setdefault("_service:" + group["id"], {})
+                alerts = service_alerts.get(group["name"].casefold(), [])
+                if alerts:
+                    # Stable service/category identity survives detail changes and client differences.
+                    fingerprint = hashlib.sha256(json.dumps(sorted({a[0] for a in alerts})).encode()).hexdigest()
                     if state.get("alert") != fingerprint:
-                        event = f"mcp:{cfg_hash[:20]}:{state.get('episode', 0)}:{fingerprint}"
+                        event = f"mcp:{group['id']}:{state.get('episode', 0)}:{fingerprint}"
+                        clients = ", ".join(sorted({a[1] for a in alerts}))
                         self.lock.release()
                         try:
-                            self.notice(event, "MCP attention: " + row["name"],
-                                        f"{row['runtime']}: {alert} Open Settings → MCP connections.", kind="blocker")
+                            self.notice(event, "MCP attention: " + group["name"],
+                                        f"{clients}: {alerts[0][2]} Open Settings → MCP connections.", kind="blocker")
                         finally:
                             self.lock.acquire()
                         state["alert"] = fingerprint
-                elif state.get("alert"):
-                    state.pop("alert", None)
-                    state["episode"] = state.get("episode", 0) + 1
-                output.append(public)
+                else:
+                    active = [m for m in group["members"] if m.get("enabled", True) and not m.get("paused")]
+                    if active and all(m["health"] in {"reachable", "unsupported"} and not m.get("auth_problem")
+                                      and m["expiry_state"] not in {"expired", "expiring"} for m in active):
+                        if state.pop("alert", None):
+                            state["episode"] = state.get("episode", 0) + 1
+                        # Retire legacy per-client markers only after observed recovery.
+                        for member in active:
+                            self.state[member["id"]].pop("alert", None)
             self.rows = output
             self.initialized = True
             self.save()

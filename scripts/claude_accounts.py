@@ -99,6 +99,7 @@ def label(config_dir):
 # ── 残量API（clc.py と同じ oauth/usage を標準ライブラリで直接叩く）──────
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 USAGE_TTL = 300  # 秒（5分。使用量は瞬時に動かないため頻繁な呼び出しを避ける）
+USAGE_REFRESH_MIN = 60  # Manual refresh may bypass the TTL, never the provider cooldown.
 USAGE_TIMEOUT = 8
 UNKNOWN_SCORE = 50.0     # 残量が取れなかったアカウントの中立スコア。999（＝最下位）にすると
 # 429 のたびにそのアカウントが後回しになり、結果としていつも同じ方に偏って片肺運用になる。
@@ -125,26 +126,29 @@ def _fetch_usage_raw(config_dir):
         return json.loads(res.read())
 
 
-def usage(config_dir):
-    """1アカウント分の使用量（5分キャッシュ）。失敗時は {"error": "…"}（直近成功データがあればそれ）。
+def usage(config_dir, force=False):
+    """Usage cached for five minutes; manual checks may refresh after one minute.
 
-    残量APIの429に対して短時間で再要求すると制限を強めるため、1リクエストにつき1回だけ取得する。
+    Failures retain the last values with an error/stale marker and are also cached.
+    Each check makes only one provider request; fetched_at is the last successful fetch.
     """
     key = str(config_dir)
     with _usage_lock:
         cache = _usage_cache.setdefault(key, {"ts": 0, "data": None})
-        if cache["data"] is not None and time.time() - cache["ts"] < USAGE_TTL:
+        cooldown = USAGE_REFRESH_MIN if force else USAGE_TTL
+        if cache["data"] is not None and time.time() - cache["ts"] < cooldown:
             return cache["data"]
         try:
-            data = _fetch_usage_raw(config_dir)
+            data = dict(_fetch_usage_raw(config_dir), fetched_at=time.time())
             cache.update(ts=time.time(), data=data)
             return data
         except Exception as e:
             error_message = str(e)
-        if cache["data"] is not None:
-            return cache["data"]
-        cache.update(ts=time.time(), data=None)
-        return {"error": error_message}
+        data = dict(cache["data"] or {}, error=error_message)
+        if data.get("fetched_at"):
+            data["stale"] = True
+        cache.update(ts=time.time(), data=data)
+        return data
 
 
 def refresh_expiry(config_dir):
@@ -164,7 +168,7 @@ def refresh_expiry(config_dir):
         return None
 
 
-def usage_all():
+def usage_all(force=False):
     """全アカウント分をまとめて返す（{"A": {...}, "B": {...}}）。ダッシュボードの /usage-accounts 用。
     各アカウントの dict に refresh_expires_at（ISO文字列 or None）も混ぜて返す
     （refreshToken の残り寿命をホーム画面で先読み警告するため・2026-08-28 追加）。
@@ -173,7 +177,7 @@ def usage_all():
     for a in ACCOUNTS:
         if a["kind"] != "claude":
             continue
-        data = dict(usage(a["dir"]))  # usage() のキャッシュ辞書を直接書き換えない
+        data = dict(usage(a["dir"], force=force))  # Do not mutate the cached response.
         data["refresh_expires_at"] = refresh_expiry(a["dir"])
         out[a["key"]] = data
         
@@ -264,13 +268,16 @@ def codex_usage():
             raw = _codex_usage_raw()
             limits = raw.get("rateLimits") or {}
             credits = limits.get("credits") or {}
-            data = {"five_hour": _codex_window(raw, "primary"),
+            data = {"fetched_at": time.time(),
+                    "five_hour": _codex_window(raw, "primary"),
                     "seven_day": _codex_window(raw, "secondary"),
                     "credits": credits,
                     "available_resets": (raw.get("rateLimitResetCredits") or {}).get("availableCount", 0),
                     "plan_type": limits.get("planType")}
         except Exception as e:
-            data = {"error": str(e)}
+            data = dict(_codex_usage_cache["data"] or {}, error=str(e))
+            if data.get("fetched_at"):
+                data["stale"] = True
         _codex_usage_cache.update(ts=time.time(), data=data)
         return data
 

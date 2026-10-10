@@ -296,10 +296,18 @@ def tt_js_ui(source, ctx=None):
         in_label_map = (re.search(r"\b(?:const|let|var)\s+[\w$]*(?:_LABELS?|Labels?)\s*=\s*\{[^{}]*$",
                                   label_scope) is not None
                         and re.search(r"[\w$]+\s*:\s*$", prefix) is not None)
+        icon_label = bool(re.search(r"\bshukiIcon\([^)]*\)\s*\+\s*$", prefix)
+                          or re.search(r'''\bshukiSetIconLabel\(.*,[ ]*['"][a-z0-9-]+['"],[ ]*$''', prefix))
         ui_target = (bool(_JS_UI_TARGET_RE.search(prefix)) or bool(_HTML_IN_JS_RE.search(raw))
-                     or in_label_map)
+                     or in_label_map or icon_label)
         if ui_target:
-            translated = tt_html(raw, ctx=ctx) if _HTML_IN_JS_RE.search(raw) else t(raw, ctx=ctx)
+            if _HTML_IN_JS_RE.search(raw):
+                translated = tt_html(raw, ctx=ctx)
+            elif icon_label:
+                translated = raw[:len(raw) - len(raw.lstrip())] + t(raw.strip(), ctx=ctx)
+                translated += raw[len(raw.rstrip()):]
+            else:
+                translated = t(raw, ctx=ctx)
             if translated != raw:
                 if quote == "'":
                     translated = translated.replace("\\", "\\\\").replace("'", "\\'")

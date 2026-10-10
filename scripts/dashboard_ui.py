@@ -131,7 +131,8 @@ def pwa_head():
 <link rel="stylesheet" href="/theme.css">
 <script src="/profile.js"></script>
 <script src="/sfx.js" defer></script>
-<script src="/push/client.js" defer></script>'''
+<script src="/push/client.js" defer></script>
+<script src="/tutorial.js" defer></script>''' + dashboard_icons.browser_icons_script()
 # ↑ 全ページが pwa_head() を <head> に埋め込むため、/theme.css・/sfx.js の配線もここ1箇所で
 # 全ページに伝播する（dashboard_server.py の render_html/render_settings_html・
 # dashboard_board/files/progress/trading.py）。/sfx.js は合成音のSE（2026-08-21・
@@ -273,6 +274,16 @@ _SIDEBAR_LINKS = [
 ]
 
 
+# 使用量パネルなど、集計側（dashboard_server.py）が持つ部品をサイドバーへ差し込む口。
+# dashboard_chat.set_skill_catalog_getter と同じく、逆依存を避けて呼び出し側が登録する。
+_sidebar_extra_getter = None
+
+
+def set_sidebar_extra_getter(fn):
+    global _sidebar_extra_getter
+    _sidebar_extra_getter = fn
+
+
 def _sidebar_icon(key, size=18):
     if key in dashboard_icons.NAV_PATHS:
         return dashboard_icons.nav_icon_svg(key, size)
@@ -301,12 +312,16 @@ def sidebar_panel_html():
     sidebar_js = _SIDEBAR_JS_TMPL.replace(
         "__NO_HISTORY__", t("実行履歴は、まだありません", ctx="sidebar")).replace("__TURN_LABEL__", t("ターン", ctx="sidebar"))
     sidebar_js = shuki_i18n.tt_js_ui(sidebar_js, ctx="sidebar")
+    try:  # 差し込み部品が壊れても全ページのヘッダーを道連れにしない
+        extra = _sidebar_extra_getter() if _sidebar_extra_getter else ""
+    except Exception:
+        extra = ""
     panel = (f'<div id="sb-overlay" class="sb-overlay" onclick="shukiSidebarClose()"></div>'
             f'<aside id="sb-panel" class="sb-panel" aria-hidden="true">'
             f'<div class="sb-head"><span>{t("メニュー", ctx="sidebar")}</span>'
             f'<button type="button" class="sb-close" onclick="shukiSidebarClose()" '
             f'title="{t("閉じる", ctx="sidebar")}">{dashboard_icons.ui_icon_svg("cross", 16)}</button></div>'
-            f'<nav class="sb-links">{"".join(links)}</nav>'
+            f'<nav class="sb-links">{"".join(links)}</nav>{extra}'
             f'<section class="sb-sessions" aria-label="Sessions">'
             f'<div id="sb-sessions-head" class="sb-hist-head">{dashboard_icons.ui_icon_svg("clock", 14)} Sessions</div>'
             f'<button id="sb-session-review" class="sb-session-control" type="button" onclick="shukiSessionsReview()">Review with AI</button>'
@@ -391,6 +406,8 @@ function shukiSidebarLoad() {
        ['hist-turns', (h.turns == null ? 1 : h.turns) + '__TURN_LABEL__']].forEach(function(p) {
         var span = document.createElement('span');
         span.className = p[0]; span.textContent = p[1];
+        if (p[0].startsWith('hist-outcome') && p[1])
+          shukiSetIconLabel(span, ({ok:'check',review:'eye',incomplete:'warn',running:'loading'})[h.outcome] || 'dot', p[1]);
         li.appendChild(span);
       });
       hist.appendChild(li);
@@ -519,7 +536,7 @@ def _bgm_widget_html():
 <button type="button" id="shuki-bgm-btn" class="shuki-bgm-btn" title="__BGM_TITLE__" aria-pressed="false"
   style="position:fixed;right:14px;bottom:76px;z-index:40;width:44px;height:44px;border-radius:50%;
   border:1px solid var(--line);background:var(--card);color:var(--fg);font-size:18px;cursor:pointer;
-  box-shadow:0 2px 8px rgba(0,0,0,.25);">🎵</button>
+  box-shadow:0 2px 8px rgba(0,0,0,.25);">__BGM_ICON__</button>
 <style>
   .shuki-bgm-btn.on { background:var(--accent); color:#fff; }
   @media (min-width: 701px) { .shuki-bgm-btn { bottom:14px; } }
@@ -534,7 +551,7 @@ def _bgm_widget_html():
     playing = on;
     b.classList.toggle('on', on);
     b.setAttribute('aria-pressed', on ? 'true' : 'false');
-    b.textContent = on ? '\U0001F50A' : '\U0001F3B5';
+    b.innerHTML = on ? shukiIcon('speaker', 20) : shukiIcon('music', 20);
   }
   b.addEventListener('click', function() {
     if (playing) { a.pause(); setState(false); return; }
@@ -542,7 +559,8 @@ def _bgm_widget_html():
     a.play().then(function() { setState(true); }).catch(function() {});
   });
 })();
-</script>""".replace("__BGM_TITLE__", t("BGMを再生/停止", ctx="audio"))
+</script>""".replace("__BGM_TITLE__", t("BGMを再生/停止", ctx="audio")).replace(
+        "__BGM_ICON__", dashboard_icons.ui_icon_svg("music", 20))
 
 
 def inject_shell(html_text, active, title):
@@ -578,11 +596,15 @@ def inject_shell(html_text, active, title):
     # <!--SHUKI_ICO:filter--> / <!--SHUKI_ICO:sort:16--> を線アイコンSVGに差し替える
     # （2026-08-08 追加）。静的ページは Python を呼べないため、放っておくと各 index.html が
     # SVGパスを自前で持ち＝同じ意味のアイコンが複数箇所に散る（UIデザイン原則 §9 が禁じている）。
-    html_text = re.sub(
+    html_text = _hydrate_icon_markers(html_text)
+    return html_text
+
+
+def _hydrate_icon_markers(html_text):
+    return re.sub(
         r"<!--SHUKI_ICO:([a-z0-9-]+)(?::(\d+))?-->",
         lambda m: dashboard_icons.ui_icon_svg(m.group(1), int(m.group(2) or 14)),
         html_text)
-    return html_text
 
 
 def hydrate_shell(page_html, active, title, extra_html="", inflow=False):
@@ -596,7 +618,7 @@ def hydrate_shell(page_html, active, title, extra_html="", inflow=False):
     組むので反映される）不整合があった（2026-09-01 修正）。
     プレースホルダは inject_shell と共通（<!--SHUKI_PAGE_HEADER--> / <!--SHUKI_BOTTOM_NAV-->）。
     """
-    page_html = shuki_i18n.tt_html(page_html, ctx=active)
+    page_html = _hydrate_icon_markers(shuki_i18n.tt_html(page_html, ctx=active))
     page_html = page_html.replace("<!--SHUKI_PAGE_HEADER-->",
                                   page_header(active, title, extra_html))
     page_html = page_html.replace("<!--SHUKI_BOTTOM_NAV-->",
@@ -686,6 +708,7 @@ def bottom_nav_html(active, inflow=False):
 # 2026-08-03）。以後はここが単一の正。page_header() を使うページはページ固有 <style> に
 # header/.hbtn を重複定義しないこと。
 RESPONSIVE_CSS = """
+  .shuki-icon { display:inline-block; vertical-align:-.15em; flex-shrink:0; pointer-events:none; }
   /* タイトル行(.hd-top)とナビ行(.hd-nav)を構造的に分離した2段固定。ナビは折り返さず横スクロール
      にすることで、追加ボタンの数やタイトルの長さに関わらず縦位置が動かない（2026-08-03 標準化）。
      スクロール追従（2026-08-06）: 下までスクロールしてもナビが届く＝「戻るために一番上まで
@@ -862,6 +885,44 @@ RESPONSIVE_CSS = """
   .sb-runs { font-size:.82rem; color:var(--muted); }
   .sb-runs summary { min-height:44px; display:flex; align-items:center; cursor:pointer; }
   @media (max-width: 700px) { .sb-panel { width:min(280px, 82vw); } }
+  /* Claude/Codex 使用量パネル。2026-10-08 にホームからサイドバーへ移した（ホームを書く画面に
+     絞ったため）。ログイン切れが近い時はトリガー自体を赤くする（.sb-warn）。 */
+  .sb-trigger.sb-warn { color:var(--red); border-color:var(--red); }
+  .sb-accounts { display:flex; flex-direction:column; gap:6px; min-width:0; }
+  .acc-toolbar { display:flex; align-items:center; justify-content:space-between; gap:6px;
+    font-size:.78rem; font-weight:bold; }
+  .acc-toolbar .acc-retry { display:inline-flex; align-items:center; justify-content:center; gap:4px; }
+  .acc-status { font-size:.7rem; color:var(--muted); overflow-wrap:anywhere; }
+  .acc-status:empty { display:none; }
+  .u-chip { border:1px solid var(--line); border-radius:20px; padding:2px 10px; color:var(--muted);
+    display:inline-flex; align-items:center; gap:5px; }
+  .u-chip .u-dot { width:7px; height:7px; border-radius:50%; background:var(--teal); flex-shrink:0; }
+  .u-chip.warn .u-dot { background:var(--accent); }
+  .u-chip.warn { color:var(--accent); border-color:color-mix(in srgb, var(--accent) 33%, transparent); }
+  .u-chip.danger .u-dot { background:var(--red); }
+  .u-chip.danger { color:var(--red); border-color:color-mix(in srgb, var(--red) 33%, transparent); }
+  .acc-card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:8px; min-width:0; }
+  .acc-head { display:flex; align-items:center; gap:6px; margin-bottom:4px; font-size:.78rem;
+    color:var(--muted); font-weight:bold; overflow-wrap:anywhere; }
+  .acc-head svg { flex-shrink:0; }
+  .acc-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .acc-body { display:flex; flex-direction:column; gap:3px; }
+  .acc-retry { align-self:flex-start; min-height:44px; padding:4px 8px; border:1px solid var(--line); border-radius:6px;
+    background:transparent; color:var(--accent); cursor:pointer; font:inherit; }
+  .acc-retry:disabled { opacity:.6; cursor:wait; }
+  .acc-row { display:grid; grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);
+    align-items:center; gap:5px; font-size:.75rem; min-width:0; }
+  .acc-wlabel { color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .acc-row .u-chip { padding:1px 5px; font-variant-numeric:tabular-nums; white-space:nowrap;
+    color:var(--fg); max-width:100%; min-width:0; overflow:hidden; text-overflow:ellipsis; }
+  .acc-reset { color:var(--muted); font-size:.68rem; white-space:nowrap; text-align:right;
+    overflow:hidden; text-overflow:ellipsis; }
+  .acc-meta { display:flex; justify-content:space-between; gap:6px; flex-wrap:wrap; font-size:.7rem;
+    color:var(--muted); border-top:1px solid var(--line); padding-top:4px; margin-top:2px; }
+  .acc-meta span { overflow-wrap:anywhere; min-width:0; }
+  .acc-error { font-size:.72rem; color:var(--muted); overflow-wrap:anywhere; }
+  .acc-refresh-warn { color:var(--red); font-size:.78rem; font-weight:bold;
+    background:color-mix(in srgb, var(--red) 12%, transparent); border-radius:8px; padding:4px 8px; }
   :is(a,button,input,select,textarea,summary,[tabindex]):focus-visible {
     outline:3px solid var(--accent); outline-offset:3px;
   }

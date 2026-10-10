@@ -53,6 +53,8 @@ orchestrator が回収して行う。このモジュールは「何を聞いて�
 
 response_type は、行動の承認を聞く既存の yes_no、A/B/C 等から選ぶ choice、
 不足情報を自由記述で受ける text、日付と開始時刻を選ぶ datetime の4種類。
+choice は画面の「その他（自由に書く）」から自由記述（回答）も受けるので、不足情報も
+候補を挙げて choice で聞くのが既定。選択肢の無い text は候補を挙げられない時だけ（2026-10-09）。
 旧形式の yes/no やコメントはそのまま読める。
 """
 from __future__ import annotations
@@ -154,6 +156,10 @@ def _response_type(raw: dict, options: list[dict]) -> str:
     """新旧レコードから応答型を推定する。"""
     requested = _explicit_response_type(raw)
     if requested in RESPONSE_TYPES:
+        # 選択肢付きの text は choice として出す（選択式カードは「その他（自由に書く）」で
+        # 自由記述も受けるため、text と分ける意味がない。2026-10-09 自由記述だけのカードを減らす）
+        if requested == "text" and options:
+            return "choice"
         if requested != "choice" or options:
             return requested
     if options:
@@ -251,7 +257,11 @@ def save_open(items: list[dict]) -> None:
 def add(new_items: list[dict], source: str = "") -> tuple[int, int]:
     """未決裁を追加する。既に同じ id があれば触らない（＝再掲が構造的に起きない）。
 
-    戻り値: (追加した件数, 既存で飛ばした件数)
+    例外は1つだけ：選択肢の無い自由記述カード（text）と同じ id の提案が options 付きで届いたら、
+    カードを増やさずその選択肢を既存カードに足して choice にする（2026-10-09 新設。
+    「自由記述だけはきつい」ため、補充便が既存カードを後から選択式へ直せるようにする）。
+
+    戻り値: (追加した件数＋選択肢を足した件数, 既存で飛ばした件数)
     """
     items = load_open()
     known = {d["id"] for d in items}
@@ -266,12 +276,19 @@ def add(new_items: list[dict], source: str = "") -> tuple[int, int]:
             continue
         tp = (raw.get("task_path") or "").strip()
         did = raw.get("id") or make_id(q, tp)
+        options = _normalise_options(raw.get("options"))
         if did in known or did in resolved_ids:
-            skipped += 1
+            current = next((d for d in items if d["id"] == did), None)
+            if (current is not None and options and not current.get("options")
+                    and current.get("response_type") == "text"):
+                current["options"] = options
+                current["response_type"] = "choice"
+                added += 1
+            else:
+                skipped += 1
             continue
         yes = (raw.get("yes") or "").strip()
         no = (raw.get("no") or "").strip()
-        options = _normalise_options(raw.get("options"))
         response_type = _response_type(raw, options)
         if response_type == "text" and _is_session_datetime_question(raw):
             skipped += 1

@@ -19,6 +19,7 @@ import urllib.parse
 
 import dashboard_ui  # noqa: E402  (nav_html/bottom_nav_html/PWA_HEAD/RESPONSIVE_CSS を再利用)
 import dashboard_chat  # noqa: E402  (💬 全ページ共通の対話ドック)
+import dashboard_icons
 import view_engine  # noqa: E402  (render_table_html/render_cards_html)
 
 # 🖥 UIデザイン原則 §7: 生hexを書かずトークン経由のみ。
@@ -56,7 +57,7 @@ table.demo-table { width:100%; border-collapse:collapse; font-size:.82rem; }
 def render_base_html(rel_path, data):
     title = (rel_path.rsplit("/", 1)[-1] if rel_path else "base") or "base"
     if data.get("error"):
-        body = f'<p class="sec-note">⚠️ {html.escape(data["error"])}</p>'
+        body = f'<p class="sec-note">{dashboard_icons.ui_icon_svg("warn")} {html.escape(data["error"])}</p>'
         tabs = ""
     else:
         if data.get("view_type") == "cards":
@@ -97,7 +98,7 @@ def render_base_html(rel_path, data):
 </head>
 <body>
 <header>
-  <a href="/" class="hbtn">🏠</a>
+  <a href="/" class="hbtn" aria-label="Home">{dashboard_icons.nav_icon_svg("home", 16)}</a>
   <h1>{html.escape(title)}</h1>
 </header>
 <p class="sec-note" style="padding:0 12px;">{html.escape(rel_path)}</p>

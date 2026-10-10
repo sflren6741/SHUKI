@@ -78,6 +78,8 @@ scripts/**
 !scripts/dashboard_settings.py
 !scripts/dashboard_sfx.py
 !scripts/dashboard_theme.py
+!scripts/dashboard_tutorial.py
+!scripts/test_dashboard_tutorial.py
 !scripts/dashboard_ui.py
 !scripts/dashboard_voice_context.py
 !scripts/dashboard_voice.js

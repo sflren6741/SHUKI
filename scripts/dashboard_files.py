@@ -40,7 +40,7 @@ PAGE = """<!DOCTYPE html>
 <html lang="ja"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 """ + dashboard_ui.pwa_head() + dashboard_chat.assets_head() + """
-<title>📁 ファイル</title>
+<title>ファイル</title>
 <style>
   * { box-sizing:border-box; margin:0; }
   /* デザイントークンは /theme.css が単一の正（共通ページと同じ流儀）。 */
@@ -576,7 +576,7 @@ function renderItem(t) {
 
   const pv = document.createElement('div');
   pv.className = 'item-preview';
-  pv.innerHTML = '<div class="pv-toolbar"><button class="pv-maxi-btn" title="画面いっぱいに広げて読む">⛶</button></div>'
+  pv.innerHTML = '<div class="pv-toolbar"><button class="pv-maxi-btn" title="画面いっぱいに広げて読む">' + shukiIcon('maximize') + '</button></div>'
     + (t.virtual
       ? '<div class="pv-body"><div class="update-preview">' + virtualPreviewHtml(t) + '</div></div>'
       : '<div class="pv-body"><span class="pv-loading">読み込み中…</span></div>');
@@ -764,7 +764,7 @@ function setupMaxiBtn(pv) {
   btn.onclick = (e) => {
     e.stopPropagation();
     const on = pv.classList.toggle('maxi');
-    btn.textContent = on ? '⤡' : '⛶';
+    btn.innerHTML = shukiIcon(on ? 'shrink' : 'maximize');
     btn.title = on ? '元のサイズに戻す' : '画面いっぱいに広げて読む';
     document.body.style.overflow = on ? 'hidden' : '';
   };
@@ -776,7 +776,7 @@ document.addEventListener('keydown', (e) => {
   m.classList.remove('maxi');
   document.body.style.overflow = '';
   const b = m.querySelector('.pv-maxi-btn');
-  if (b) { b.textContent = '⛶'; b.title = '画面いっぱいに広げて読む'; }
+  if (b) { b.innerHTML = shukiIcon('maximize'); b.title = '画面いっぱいに広げて読む'; }
 });
 /* wikilink クリック：ページ遷移せず、その場の下に対象ノートを展開する（もう一度押すと閉じる）。
    hrefは正規入口の /files?p= だが preventDefault で辿らせず、このページ内で展開する。 */
@@ -802,10 +802,10 @@ document.addEventListener('click', (e) => {
   const box = document.createElement('div');
   box.className = 'wl-nest';
   box.dataset.p = a.dataset.p;
-  box.innerHTML = '<div class="wl-nest-hd" title="クリックで閉じる">✕ ' + esc(a.dataset.p) + '</div><span class="pv-loading">読み込み中…</span>';
+  box.innerHTML = '<div class="wl-nest-hd" title="クリックで閉じる">' + shukiIcon('cross') + ' ' + esc(a.dataset.p) + '</div><span class="pv-loading">読み込み中…</span>';
   host.after(box);
   loadPreview(box, a.dataset.p, true).then(() => {
-    box.insertAdjacentHTML('afterbegin', '<div class="wl-nest-hd" title="クリックで閉じる">✕ ' + esc(a.dataset.p) + '</div>');
+    box.insertAdjacentHTML('afterbegin', '<div class="wl-nest-hd" title="クリックで閉じる">' + shukiIcon('cross') + ' ' + esc(a.dataset.p) + '</div>');
   });
 });
 

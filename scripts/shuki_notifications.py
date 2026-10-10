@@ -24,10 +24,10 @@ an existing notice/decision card. Existing notification delivery handles the inb
 
 # Ordered for display: what blocks you first, what you must decide next, then results/updates.
 CATEGORIES = [
-    ("blocker", "🚧", "Blocked"),
-    ("decision", "⚖️", "Decide"),
-    ("important_result", "✅", "Result"),
-    ("upgrade", "⬆️", "Update"),
+    ("blocker", "barrier", "Blocked"),
+    ("decision", "scale", "Decide"),
+    ("important_result", "check", "Result"),
+    ("upgrade", "arrow-up", "Update"),
 ]
 
 
@@ -75,7 +75,7 @@ def post_notice(event, title, summary, kind="upgrade", acknowledged=False, sessi
     atomic_json(path, {"source": "system", "kind": "Notification", "notification": kind,
                        "title": title, "summary": summary[:400], "ts": time.time(),
                        "push_pending": True, "push_attempts": 0, "event": event,
-                       "session": session, "choices": list(choices or [])[:3]})
+                       "session": session, "choices": list(choices or [])[:4]})
     return path
 
 

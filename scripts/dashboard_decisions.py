@@ -9,7 +9,7 @@ dashboard_decisions.py — ⚖️ 決裁カードページ（dashboard_server.py
 データは decisions.py（99_System/decisions/open.json）が正。このモジュールは表示と
 POST /queue（既存の decision_results 経路。dashboard_server.py 側で decisions.apply_choice
 を呼ぶ処理は既に実装済み）を1件ずつ消化するUIだけを持つ。カードの応答型は、yes_no（既存の
-承認/却下）、choice（A/B/C等の選択）、text（不足情報の自由記述）、datetime（日付＋開始時刻の選択）の4つ。ホームの決裁パネル
+承認/却下）、choice（A/B/C等の選択。合わない時は「その他（自由に書く）」で回答できる）、text（不足情報の自由記述）、datetime（日付＋開始時刻の選択）の4つ。ホームの決裁パネル
 （縦積み全件表示）は撤去し、件数バッジ＋このページへのリンクだけに縮小した。
 """
 import dashboard_ui  # noqa: E402
@@ -22,7 +22,7 @@ PAGE = """<!DOCTYPE html>
 <html lang="ja"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 """ + dashboard_ui.pwa_head() + dashboard_chat.assets_head() + """
-<title>⚖️ 決裁</title>
+<title>決裁</title>
 <style>
   * { box-sizing:border-box; margin:0; }
   body { background:var(--bg); color:var(--fg);
@@ -72,6 +72,9 @@ PAGE = """<!DOCTYPE html>
     text-align:left; line-height:1.45; }
   .c-option:hover { border-color:var(--teal); color:var(--teal); }
   .c-option-detail { display:block; color:var(--muted); font-size:.78rem; margin-top:3px; }
+  .c-option.c-other { color:var(--muted); border-style:dashed; display:flex; align-items:center; gap:6px; }
+  .c-option.c-other[aria-expanded="true"] { border-style:solid; border-color:var(--accent); color:var(--fg); }
+  .c-answer-box[hidden] { display:none; }
   .c-src { text-decoration:none; opacity:.6; font-size:.8rem; display:inline-flex; margin-left:6px; }
   .bulk-status { min-height:1.2em; margin:0 0 10px; color:var(--muted); font-size:.76rem; }
   .hbtn:disabled { opacity:.45; cursor:not-allowed; }
@@ -94,6 +97,9 @@ PAGE = """<!DOCTYPE html>
 
 <script>
 let QUEUE = [], TOTAL = 0, DONE = 0, BULK_BUSY = false;
+// 文言は esc() より前に置く（tt_js_ui は esc() の正規表現内の引用符で文字列の境界を見失い、
+// それ以降の HTML 属性 placeholder を訳せないため）
+const DEC_LABELS = { placeholder: '回答を書く…' };
 
 function esc(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;')
@@ -144,7 +150,8 @@ function updateBulkButton() {
 function setBulkStatus(text, error) {
   const el = document.getElementById('bulk-status');
   if (!el) return;
-  el.textContent = text;
+  if (text.startsWith('✓ ')) shukiSetIconLabel(el, error ? 'warn' : 'check', text.slice(2));
+  else el.textContent = text;
   el.style.color = error ? 'var(--danger)' : '';
 }
 
@@ -176,11 +183,17 @@ function renderCard(it, animateIn) {
   let answerBox = '';
   let actionButtons = '';
   if (rt === 'choice' && Array.isArray(it.options) && it.options.length) {
+    // 選択肢が合わない時の逃げ道として「その他（自由に書く）」を必ず添える。
+    // 自由記述は既定で畳み、選択肢を主回答にする（2026-10-09 自由記述だけはきつい）。
     choices = '<div class="c-options">' + it.options.map(o => {
       const detail = o.detail ? '<span class="c-option-detail">' + esc(o.detail) + '</span>' : '';
       return '<button type="button" class="c-option" data-option="' + esc(o.id) + '">' +
         esc(o.label || o.id) + detail + '</button>';
-    }).join('') + '</div>';
+    }).join('') +
+      '<button type="button" class="c-option c-other" data-act="other" aria-expanded="false">""" + dashboard_icons.ui_icon_svg("pencil", 13) + """ その他（自由に書く）</button>' +
+      '</div>';
+    answerBox = '<div class="c-answer-box" hidden><textarea placeholder="' + esc(DEC_LABELS.placeholder) + '" rows="3"></textarea>' +
+      '<div class="c-btns"><button type="button" class="cbtn sel" data-act="answer">""" + dashboard_icons.ui_icon_svg("check", 13) + """ 回答する</button></div></div>';
     actionButtons = '<div class="c-btns">' +
       btnHtml('保留', '""" + dashboard_icons.ui_icon_svg("pause", 12) + """') +
       btnHtml('削除', '""" + dashboard_icons.ui_icon_svg("trash", 13) + """') +
@@ -207,7 +220,7 @@ function renderCard(it, animateIn) {
       btnHtml('削除', '""" + dashboard_icons.ui_icon_svg("trash", 13) + """') +
       '</div>';
   } else if (rt === 'text') {
-    answerBox = '<div class="c-answer-box"><textarea placeholder="回答を書く…" rows="3"></textarea></div>';
+    answerBox = '<div class="c-answer-box"><textarea placeholder="' + esc(DEC_LABELS.placeholder) + '" rows="3"></textarea></div>';
     actionButtons = '<div class="c-btns">' +
       '<button type="button" class="cbtn sel" data-act="answer">""" + dashboard_icons.ui_icon_svg("check", 13) + """ 回答する</button>' +
       btnHtml('保留', '""" + dashboard_icons.ui_icon_svg("pause", 12) + """') +
@@ -224,7 +237,7 @@ function renderCard(it, animateIn) {
       btnHtml('削除', '""" + dashboard_icons.ui_icon_svg("trash", 13) + """') +
       '</div>';
   } else {
-    answerBox = '<div class="c-answer-box"><textarea placeholder="回答を書く…" rows="3"></textarea></div>';
+    answerBox = '<div class="c-answer-box"><textarea placeholder="' + esc(DEC_LABELS.placeholder) + '" rows="3"></textarea></div>';
     actionButtons = '<div class="c-btns">' +
       '<button type="button" class="cbtn sel" data-act="answer">""" + dashboard_icons.ui_icon_svg("check", 13) + """ 回答する</button>' +
       btnHtml('保留', '""" + dashboard_icons.ui_icon_svg("pause", 12) + """') +
@@ -242,6 +255,15 @@ function renderCard(it, animateIn) {
   card.querySelectorAll('[data-option]').forEach(b => {
     b.onclick = () => sendDecision(card, b, '選択', '', b.dataset.option);
   });
+  const otherBtn = card.querySelector('[data-act="other"]');
+  if (otherBtn) {
+    otherBtn.onclick = () => {
+      const box = card.querySelector('.c-answer-box');
+      box.hidden = !box.hidden;
+      otherBtn.setAttribute('aria-expanded', box.hidden ? 'false' : 'true');
+      if (!box.hidden) box.querySelector('textarea').focus();
+    };
+  }
   const answerBtn = card.querySelector('[data-act="answer"]');
   if (answerBtn) {
     const ta = card.querySelector('textarea');

@@ -18,7 +18,6 @@ FEATURE_MARKERS = {
     "habit": "plugins/habit/manifest.json",
     "finance": "plugins/finance/manifest.json",
     "crossword": "plugins/crossword/manifest.json",
-    "briefing": "plugins/briefing/manifest.json",
     "styleguide": "plugins/styleguide/manifest.json",
     "meeting": "plugins/meeting/manifest.json",
 }
@@ -26,7 +25,7 @@ PLUGIN_SKILLS = {"crossword-gen": "crossword", "visualize": "visualize"}
 FEATURE_ROUTES = {
     **{feature: feature for feature in FEATURE_MARKERS},
     "control": "operations", "review": "operations", "notifications": "operations",
-    "rec-dismiss": "operations", "decisions": "decisions", "gaps": "decisions", "radio": "briefing",
+    "rec-dismiss": "operations", "decisions": "decisions", "gaps": "decisions",
     "bgm": "game",
 }
 _SCRIPTS = Path(__file__).resolve().parent.parent

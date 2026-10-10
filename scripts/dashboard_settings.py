@@ -108,7 +108,7 @@ DEFAULT_LANG = "ja"
 # 並べ替え可能な上段セクション（key -> 表示名）。順序はユーザーが変更できる。
 ORDERABLE_SECTIONS = [
     ("focus", "フォーカス帯（今日はこれ！）"),
-    ("accounts", "Claudeアカウントパネル（残量2契約分）"),
+    # accounts（Claudeアカウントパネル）は 2026-10-08 にサイドバーへ移した（全ページ共通・常時表示）。
     ("achievements", "称号バンド"),
     ("pages", "各ページの更新（1行サマリ）"),
     # launcher（主要スキル＋モデル選択）は 2026-08-16 の対話ドック化でホーム上段から撤去。
@@ -176,7 +176,6 @@ def _defaults():
         "accent": "",  # "" = テーマ既定のアクセント色。#RRGGBB なら上書き
         "mascot_enabled": True,
         "mascot_color": DEFAULT_MASCOT_COLOR,
-        "mascot_wander": True,
         "sections": {k: True for k in ALL_SECTION_KEYS},
         "order": list(ORDERABLE_KEYS),
         "nav": {k: True for k in NAV_TOGGLE_KEYS},  # ナビ項目の表示/非表示（論点2・2026-08-30）
@@ -210,9 +209,9 @@ def sanitize(raw, base=None):
         d["lang"] = raw["lang"]
     accent = str(raw.get("accent", "")).strip()
     d["accent"] = accent if HEX_RE.match(accent) else ""
-    for key in ("mascot_enabled", "mascot_wander"):
-        if isinstance(raw.get(key), bool):
-            d[key] = raw[key]
+    # mascot_wander (chat-panel roaming) was removed on 2026-10-09; a stored value is dropped here.
+    if isinstance(raw.get("mascot_enabled"), bool):
+        d["mascot_enabled"] = raw["mascot_enabled"]
     mascot_color = str(raw.get("mascot_color", "")).strip()
     if HEX_RE.fullmatch(mascot_color):
         d["mascot_color"] = mascot_color.lower()

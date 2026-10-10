@@ -18,6 +18,7 @@ import shuki_paths
 ASSETS = Path(__file__).resolve().parent / "dashboard_assets"
 CSRF_TOKEN = secrets.token_urlsafe(32)
 MAX_DEVICES = 8
+REPLY_TTL = 3600
 
 
 def state_file(name):
@@ -213,6 +214,67 @@ class SafePushSession:
         self.session.close()
 
 
+def reply_capability(notice):
+    """One exact decision, shared across devices; tokens stay in private storage."""
+    choices = notice.get("choices", [])
+    if (not notice.get("session") or not isinstance(choices, list)
+            or not 2 <= len(choices) <= 3
+            or not all(isinstance(c, str) and c.strip() for c in choices)
+            or len(set(choices)) != len(choices)
+            or sum(len(c) for c in choices) > 220):
+        return ""
+    now = time.time()
+    with state_guard("webpush-replies.lock"):
+        path = state_file("webpush-replies.json")
+        records = read_json(path, {})
+        records = {key: value for key, value in records.items() if value["expires"] > now}
+        event = notice.get("event", "")
+        for token, record in records.items():
+            if record["event"] == event and record["session"] == notice["session"]:
+                return token
+        # A later notification supersedes older decisions in the same conversation.
+        records = {key: value for key, value in records.items()
+                   if value["session"] != notice["session"]}
+        while len(records) >= 128:
+            records.pop(next(iter(records)))
+        token = secrets.token_urlsafe(32)
+        records[token] = {"session": notice["session"], "choices": choices,
+                          "event": event, "expires": now + REPLY_TTL, "state": "ready",
+                          "summary": hashlib.sha256(notice.get("summary", "").encode()).hexdigest()}
+        write_json(path, records)
+        return token
+
+
+def consume_reply(token, index, submit):
+    """Persist before starting work; uncertain starts must be checked in the chat."""
+    if (not isinstance(token, str) or len(token) > 100
+            or type(index) is not int):
+        raise ValueError("Invalid notification reply.")
+    with state_guard("webpush-replies.lock"):
+        path = state_file("webpush-replies.json")
+        records = read_json(path, {})
+        record = records.get(token)
+        if not record or record["expires"] <= time.time():
+            raise ValueError("This reply expired. Open the conversation for current choices.")
+        if not 0 <= index < len(record["choices"]):
+            raise ValueError("Invalid notification choice.")
+        if record["state"] == "sent" and record.get("index") == index:
+            return {"ok": True, "duplicate": True, "job": record["job"]}
+        if record["state"] != "ready":
+            raise ValueError("This decision was already used. Check the conversation before replying again.")
+        record.update(state="starting", index=index)
+        write_json(path, records)
+        result = submit(record, index)
+        if result.get("error"):
+            # Known rejection means no job was started. Unexpected exceptions retain 'starting'.
+            record["state"] = "ready"
+            write_json(path, records)
+            return result
+        record.update(state="sent", job=result["job"])
+        write_json(path, records)
+        return dict(result, ok=True)
+
+
 def send(notice, persist, target=""):
     """Checkpoint each device; retry only unaccepted devices, at most twice."""
     from pywebpush import webpush, WebPushException
@@ -226,13 +288,19 @@ def send(notice, persist, target=""):
     targets = notice.setdefault("push_targets", list(devices))
     session_id = notice.get("session", "")
     url = notice.get("url") or ("/?resume=" + urllib.parse.quote(session_id, safe="") if session_id else "/notifications")
-    choices = notice.get("choices", [])[:3] if session_id else []
+    choices = notice.get("choices", []) if session_id else []
+    token = reply_capability(notice)
+    simple_choices = choices if token else []
     body = notice.get("summary", "")[:400]
-    if choices:
-        body += "\n" + " · ".join(f"{i + 1}: {c}" for i, c in enumerate(choices))
+    labels = [c if len(c) <= 24 else f"Reply {i + 1}" for i, c in enumerate(simple_choices)]
+    if len(set(labels)) != len(labels):
+        labels = [f"Reply {i + 1}" for i in range(len(simple_choices))]
+    if simple_choices:
+        body += "\n" + " · ".join(f"{i + 1}: {c}" for i, c in enumerate(simple_choices))
     payload = json.dumps({"title": notice.get("title", "SHUKI")[:100], "body": body[:700],
                           "url": url, "tag": notice.get("event", "shuki-notice"),
-                          "choices": choices, "priority": notice.get("notification", "")}, ensure_ascii=False)
+                          "choices": labels, "hasChoices": bool(choices), "replyToken": token,
+                          "priority": notice.get("notification", "")}, ensure_ascii=False)
     persist()
     session = SafePushSession()
     try:
