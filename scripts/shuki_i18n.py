@@ -42,9 +42,12 @@ JS に載りうる語の訳では `don't` / `today's` のような表記を避�
 辞書を読み直す（`_refresh()`）。ただし更新チェックは `stat()` の mtime 比較のみで、
 実際に lang の値が変わった時だけ JSON を読み直す＝毎リクエストの負荷はごく小さい。
 """
+import hashlib
 import html
 import json
 import re
+import threading
+from collections import OrderedDict
 from contextvars import ContextVar
 from functools import wraps
 from pathlib import Path
@@ -58,6 +61,36 @@ _PAGE_CONTEXT = ContextVar("shuki_i18n_page_context", default=None)
 MISSING = set()
 
 _state = {"mtime": object(), "lang": None, "dict": {}, "patterns": {}}
+
+# tt_html / tt_js_ui の結果メモ（2026-10-10）。対話ドック（約200KB）やページ骨格は毎リクエスト
+# 同じ静的テンプレートなのに、全ページで翻訳走査を作り直していた（実測: ドック1回 ~100ms・
+# 全ページのサーバー応答 0.4〜1.3秒の主因）。結果は入力・ctx・言語だけで決まる純関数なので、
+# 入力のダイジェストで引く。辞書の読み直し（_refresh）で全消去。保持量は文字数で上限を切る。
+_MEMO = OrderedDict()
+_MEMO_LOCK = threading.Lock()
+_MEMO_SIZE = [0]
+_MEMO_MAX_CHARS = 8_000_000
+
+
+def _memoized(kind, source, ctx, compute):
+    _refresh()
+    ctx = ctx or _PAGE_CONTEXT.get()
+    key = (kind, ctx, _state["lang"],
+           hashlib.blake2b(source.encode("utf-8", "surrogatepass"), digest_size=16).digest())
+    with _MEMO_LOCK:
+        hit = _MEMO.get(key)
+        if hit is not None:
+            _MEMO.move_to_end(key)
+            return hit
+    result = compute(source, ctx)
+    with _MEMO_LOCK:
+        if key not in _MEMO and len(result) <= _MEMO_MAX_CHARS // 4:
+            _MEMO[key] = result
+            _MEMO_SIZE[0] += len(result)
+            while _MEMO_SIZE[0] > _MEMO_MAX_CHARS:
+                _, old = _MEMO.popitem(last=False)
+                _MEMO_SIZE[0] -= len(old)
+    return result
 
 
 def _load_dict(lang):
@@ -87,6 +120,9 @@ def _refresh():
     _state["dict"] = d
     _state["protected"] = set(_protected_terms())
     _state["patterns"] = {}
+    with _MEMO_LOCK:
+        _MEMO.clear()
+        _MEMO_SIZE[0] = 0
 
 
 def _protected_terms():
@@ -192,6 +228,10 @@ _HTML_UI_ATTR_RE = re.compile(r"(\b(?:title|placeholder|alt|aria-label)\s*=\s*)(
 
 def tt_html(template, ctx=None):
     """Translate static markup while leaving embedded scripts and styles to their own rules."""
+    return _memoized("html", template, ctx, _tt_html_uncached)
+
+
+def _tt_html_uncached(template, ctx):
     chunks = _NON_HTML_BLOCK_RE.split(template)
     out = []
     for chunk in chunks:
@@ -246,6 +286,115 @@ def tt_js_ui(source, ctx=None):
     Data keys and action values in static app scripts remain byte-for-byte intact; user data
     arrives separately and never passes through this helper.
     """
+    return _memoized("js", source, ctx, _tt_js_ui_uncached)
+
+
+def _js_string_end(source, i):
+    """Index of the closing quote of the '...' / "..." literal opening at ``i`` (len if unclosed)."""
+    quote, n = source[i], len(source)
+    i += 1
+    while i < n:
+        if source[i] == "\\":
+            i += 2
+            continue
+        if source[i] == quote:
+            return i
+        i += 1
+    return n
+
+
+def _js_template(source, i):
+    """Parse the template literal opening at ``i``.
+
+    Returns ``(end, parts)``: ``end`` is the closing backtick index and ``parts`` lists
+    ``("text", start, stop)`` and ``("expr", start, stop)`` spans. ``${...}`` expressions are
+    followed through nested strings, templates and braces (2026-10-11: the old scanner ended a
+    template at the first inner backtick, which desynchronised every later literal in the file).
+    """
+    n = len(source)
+    parts, j, text_start = [], i + 1, i + 1
+    while j < n:
+        ch = source[j]
+        if ch == "\\":
+            j += 2
+            continue
+        if ch == "`":
+            parts.append(("text", text_start, j))
+            return j, parts
+        if source.startswith("${", j):
+            parts.append(("text", text_start, j))
+            k = _js_expr_end(source, j + 2)
+            parts.append(("expr", j + 2, k))
+            j = text_start = k + 1
+            continue
+        j += 1
+    return n, parts
+
+
+def _js_expr_end(source, i):
+    """Index of the ``}`` closing a ``${`` expression that starts at ``i``."""
+    n, depth = len(source), 0
+    while i < n:
+        ch = source[i]
+        if source.startswith("//", i):
+            end = source.find("\n", i + 2)
+            i = n if end < 0 else end
+            continue
+        if source.startswith("/*", i):
+            end = source.find("*/", i + 2)
+            i = n if end < 0 else end + 2
+            continue
+        if ch in ("'", '"'):
+            i = _js_string_end(source, i) + 1
+            continue
+        regex_end = _js_regex_end(source, i)
+        if regex_end is not None:
+            i = regex_end + 1
+            continue
+        if ch == "`":
+            i = _js_template(source, i)[0] + 1
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            if depth == 0:
+                return i
+            depth -= 1
+        i += 1
+    return n
+
+
+_REGEX_PREV_RE = re.compile(r"(?:^|[(,=:\[!&|?{};+\-*%<>~^]|\breturn|\btypeof)\s*$")
+
+
+def _js_regex_end(source, i):
+    """If a regex literal starts at ``i`` (a ``/`` that is not a comment), return its closing
+    ``/`` index; otherwise None. Quotes inside ``/[&<>"']/`` would otherwise be read as strings."""
+    if source[i] != "/" or source.startswith(("//", "/*"), i):
+        return None
+    if not _REGEX_PREV_RE.search(source[max(0, i - 12):i]):
+        return None
+    j, n, in_class = i + 1, len(source), False
+    while j < n and source[j] != "\n":
+        ch = source[j]
+        if ch == "\\":
+            j += 2
+            continue
+        if ch == "[":
+            in_class = True
+        elif ch == "]":
+            in_class = False
+        elif ch == "/" and not in_class:
+            return j
+        j += 1
+    return None
+
+
+def _escape_template_text(s):
+    return s.replace("\\", "\\\\").replace("`", "\\`").replace("${", "\\${")
+
+
+def _tt_js_ui_uncached(source, ctx):
     _refresh()
     ctx = ctx or _PAGE_CONTEXT.get()
     pat, entries = _pattern_for(ctx)
@@ -267,26 +416,48 @@ def tt_js_ui(source, ctx=None):
             continue
         quote = source[i]
         if quote not in ("'", '"', "`"):
-            i += 1
+            regex_end = _js_regex_end(source, i)
+            i = i + 1 if regex_end is None else regex_end + 1
             continue
 
         start = i
-        i += 1
-        content_start = i
-        escaped = False
-        while i < n:
-            ch = source[i]
-            if escaped:
-                escaped = False
+        content_start = i + 1
+        if quote == "`":
+            i, parts = _js_template(source, i)
+            if any(kind == "expr" for kind, _, _ in parts):
+                if i >= n:
+                    break
+                prefix = source[max(0, start - 180):start]
+                statics = [source[a:b] for kind, a, b in parts if kind == "text"]
+                is_html = any(_HTML_IN_JS_RE.search(s) for s in statics)
+                ui_target = is_html or bool(_JS_UI_TARGET_RE.search(prefix))
+                pieces = []
+                for kind, a, b in parts:
+                    chunk = source[a:b]
+                    if kind == "expr":
+                        pieces.append(_tt_js_ui_uncached(chunk, ctx))
+                        continue
+                    translated = chunk
+                    if ui_target:
+                        if is_html:
+                            translated = tt_html(chunk, ctx=ctx)
+                        elif chunk.strip():
+                            core = chunk.strip()
+                            lead = chunk[:len(chunk) - len(chunk.lstrip())]
+                            translated = lead + t(core, ctx=ctx) + chunk[len(lead) + len(core):]
+                    pieces.append(chunk if translated == chunk else _escape_template_text(translated))
+                rebuilt, pos = [], content_start
+                for (kind, a, b), piece in zip(parts, pieces):
+                    rebuilt.append(source[pos:a] + piece)  # keeps the "${" / "}" delimiters
+                    pos = b
+                rebuilt = "".join(rebuilt)
+                if rebuilt != source[content_start:i]:
+                    out.extend((source[last:content_start], rebuilt))
+                    last = i
                 i += 1
                 continue
-            if ch == "\\":
-                escaped = True
-                i += 1
-                continue
-            if ch == quote:
-                break
-            i += 1
+        else:
+            i = _js_string_end(source, i)
         if i >= n:
             break
         content_end = i

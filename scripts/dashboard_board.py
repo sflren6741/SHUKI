@@ -402,6 +402,16 @@ PAGE = """<!DOCTYPE html>
   @media (max-width:760px) { #lane-bar { bottom:calc(70px + env(safe-area-inset-bottom)); }
     #lane-bar.on ~ .layout #wall-container { padding-bottom:160px; } }
   @media (prefers-reduced-motion:reduce) { .ac-bar-fill, .chip { transition:none; } }
+  /* 密度（🖥 UIデザイン原則 §6.2・2026-10-11）: 検索欄と「View」は M段 40px で揃え、View の押せる範囲は
+     ::before で 44px。タスク行は min-height 64px → 52px、上下 padding 10px → 8px（2行＝タイトル＋メタで
+     自然に約54px）。チェックボックスはタイトル1行目の中心に合わせる。 */
+  .board-quickbar .board-search input[type=search] { height:40px; min-height:40px; box-sizing:border-box; }
+  .board-quickbar #board-settings-toggle { position:relative; height:40px; min-height:40px; box-sizing:border-box; }
+  .board-quickbar #board-settings-toggle::before { content:''; position:absolute; inset:-3px -1px; }
+  .chip { min-height:52px; }
+  .task-open { min-height:52px; padding:8px 10px 8px 0; }
+  .task-select { padding-top:10px; }
+  .task-meta { margin-top:3px; }
   @media (forced-colors:active) { .ac-bar-fill { background:Highlight; }
     .chip.sel { border-color:Highlight; } }
 </style>

@@ -40,7 +40,7 @@ import shuki_paths  # noqa: E402
 VAULT = shuki_paths.VAULT  # 絶対パスの直書きをやめた（2026-09-28）
 NEWS_DIR = shuki_paths.bootstrap_path("news", shuki_paths.system_dir_for(VAULT) / "news")
 LOG_DIR = shuki_paths.system_dir_for(VAULT) / "agent-runs"
-FEEDS_FILE = NEWS_DIR / "feeds.json"
+FEEDS_FILE = news_store.feeds_file()  # /news/sources でも一覧・追加・削除できる
 KNOWLEDGE_DIR = VAULT / "06_Resources" / "Resources" / "ナレッジ"
 FEATURE_MOCS = (
     ("ゲーム図書館", Path("00_Intranet/MOC/ゲーム図書館.md")),
@@ -121,6 +121,36 @@ def fetch_url(url, timeout=15):
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; SHUKI-news_fetch/1.0)"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read()
+
+
+def check_feed(url):
+    """Before a feed is registered from the dashboard: fetch it once and confirm it parses.
+
+    Only public hosts are accepted, so the form cannot point the server at the LAN.
+    Returns {"title": <feed title or None>, "items": <entry count>}; raises ValueError."""
+    import ipaddress
+    import socket
+    host = urlparse(url).hostname
+    if urlparse(url).scheme not in ("http", "https") or not host:
+        raise ValueError("Enter an http:// or https:// feed URL.")
+    try:
+        addrs = {info[4][0] for info in socket.getaddrinfo(host, None)}
+    except OSError:
+        raise ValueError("That host could not be found.")
+    if not all(ipaddress.ip_address(a.split("%")[0]).is_global for a in addrs):
+        raise ValueError("Only public feed addresses can be added.")
+    try:
+        raw = fetch_url(url)
+        root = ET.fromstring(raw)
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        raise ValueError(f"Could not fetch the feed: {e}")
+    except ET.ParseError:
+        raise ValueError("That URL is not an RSS or Atom feed (use the feed URL, not the site page).")
+    items = parse_feed(raw)
+    if not items:
+        raise ValueError("The feed has no articles.")
+    title = next(((e.text or "").strip() for e in root.iter() if _local(e.tag) == "title"), None)
+    return {"title": title or None, "items": len(items)}
 
 
 # ── フィードバック学習（過去のgood/bad評価を選定プロンプトの参考例として渡す） ──

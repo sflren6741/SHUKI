@@ -11,6 +11,7 @@ shuki_paths.py — 実行環境ごとに変わる絶対パスの単一情報源�
 vault-scripts 配下の自己参照パス（このスクリプト自身の隣のファイル等）は対象外＝
 `Path(__file__).resolve().parent` で足りるものはここに含めない。
 """
+import copy
 import json
 import os
 import re
@@ -128,6 +129,26 @@ def _test_data_dir():
     return os.environ["SHUKI_TEST_DATA_DIR"]
 
 
+_RESOLVED_DIRS = {}
+
+
+def _resolved_dir(path):
+    """resolve() for a fixed root folder (vault, data root, machine zone, code tree).
+
+    The same few roots were resolved hundreds of times per page (~0.4 ms each on
+    Windows; 2026-10-10). Cached only once the folder exists, so a root created
+    later is still resolved afresh. Targets below a root are never cached here.
+    """
+    key = str(path)
+    hit = _RESOLVED_DIRS.get(key)
+    if hit is not None:
+        return hit
+    resolved = Path(path).resolve()
+    if resolved.is_dir():
+        _RESOLVED_DIRS[key] = resolved
+    return resolved
+
+
 def data_dir(owner=None):
     """Resolve an owned runtime-data directory outside the system code tree.
 
@@ -143,8 +164,8 @@ def data_dir(owner=None):
     root = Path(raw).expanduser() if raw else _HERE.parent.parent / "shuki-data"
     if not root.is_absolute():
         raise ValueError("data_dir must be an absolute path")
-    root = root.resolve()
-    if root.is_relative_to(_HERE.parent.resolve()):
+    root = _resolved_dir(root)
+    if root.is_relative_to(_resolved_dir(_HERE.parent)):
         raise ValueError("data_dir must be outside the system code tree")
     if owner is None:
         return root
@@ -157,6 +178,7 @@ def data_dir(owner=None):
 
 
 STORAGE_ACTIVATION = ".storage-activation.json"
+_ACTIVATION_CACHE = {}
 
 
 def runtime_target(key, root=None):
@@ -166,7 +188,7 @@ def runtime_target(key, root=None):
         raise ValueError("invalid runtime store key")
     if any(part in {".", ".."} for part in key.split("/")):
         raise ValueError("runtime store key cannot traverse directories")
-    root = Path(root).resolve() if root is not None else data_dir()
+    root = _resolved_dir(root) if root is not None else data_dir()
     target = (root / key).resolve()
     if not target.is_relative_to(root):
         raise ValueError("runtime store escapes data_dir")
@@ -175,10 +197,21 @@ def runtime_target(key, root=None):
 
 def storage_activation(root=None):
     """Read the activation marker strictly; corrupt state must never fall back."""
-    root = Path(root).resolve() if root is not None else data_dir()
+    root = _resolved_dir(root) if root is not None else data_dir()
     marker = root / STORAGE_ACTIVATION
     if marker.is_symlink() or not marker.resolve().is_relative_to(root):
         raise ValueError("activation marker escapes data_dir")
+    # 検証済みの内容をファイルの同一性（置換・更新で必ず変わる値）で引く（2026-10-10）。
+    # 毎回の全エントリ resolve() がホーム描画1回で約4,400回・0.8秒を占めていた。
+    # 呼び出し側（移行処理）は戻り値を書き換えるので、毎回複製を返す。
+    try:
+        st = marker.stat()
+    except FileNotFoundError:
+        return {"version": 1, "stores": {}}
+    stamp = (str(root), st.st_mtime_ns, st.st_size, st.st_ino)
+    cached = _ACTIVATION_CACHE.get("entry")
+    if cached is not None and cached[0] == stamp:
+        return copy.deepcopy(cached[1])
     try:
         state = json.loads(marker.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -198,6 +231,7 @@ def storage_activation(root=None):
                 or not re.fullmatch(r"[0-9a-f]{32}", entry["run"])
                 or (entry["kind"] == "sqlite" and not entry["existed"])):
             raise ValueError("invalid runtime storage activation entry")
+    _ACTIVATION_CACHE["entry"] = (stamp, copy.deepcopy(state))
     return state
 
 
@@ -367,7 +401,7 @@ def system_dir_for(vault):
     """`system_dir()` for the configured vault; `<vault>/99_System` for any other (tests)."""
     vault = Path(vault)
     try:
-        same = vault.resolve() == VAULT.resolve()
+        same = _resolved_dir(vault) == _resolved_dir(VAULT)
     except OSError:
         same = False
     return system_dir() if same else vault / "99_System"
@@ -394,9 +428,10 @@ def vault_rel(path, vault=None):
     path = Path(path)
     resolved = path.resolve()
     for system in (system_dir_for(vault), system_dir()):
-        if resolved.is_relative_to(Path(system).resolve()):
-            return "99_System/" + resolved.relative_to(Path(system).resolve()).as_posix()
-    return resolved.relative_to(vault.resolve()).as_posix()
+        system = _resolved_dir(system)
+        if resolved.is_relative_to(system):
+            return "99_System/" + resolved.relative_to(system).as_posix()
+    return resolved.relative_to(_resolved_dir(vault)).as_posix()
 
 
 def vault_path(rel, vault=None):
@@ -412,7 +447,7 @@ def within_vault(path, vault=None):
     """True if `path` lies in the vault or in its machine zone."""
     vault = Path(vault or VAULT)
     resolved = Path(path).resolve()
-    return any(resolved.is_relative_to(Path(root).resolve()) for root in (vault, system_dir_for(vault)))
+    return any(resolved.is_relative_to(_resolved_dir(root)) for root in (vault, system_dir_for(vault)))
 
 
 def backup_dir():

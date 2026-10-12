@@ -138,6 +138,7 @@ _LEGACY_NAV_KEYS = (
     "visualize", "control", "game", "achievements",
 )
 NAV_TOGGLE_KEYS = [k for k, _ in NAV_TOGGLE_ITEMS] + list(_LEGACY_NAV_KEYS)
+NAV_KEY_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}")
 _NAV_GROUP_LEGACY_KEYS = {
     "do": ("board", "habit", "cards"),
     "reflect": ("progress", "visualize", "achievements"),
@@ -238,6 +239,9 @@ def sanitize(raw, base=None):
                 bool(navset.get(child, True)) for child in legacy
             )
         d["nav"].update({k: bool(navset.get(k, True)) for k in _LEGACY_NAV_KEYS})
+        # 2026-10-11: ページ単位の表示切替。プラグインがページを足すため、キーは固定一覧でなく形式で検証する。
+        d["nav"].update({k: bool(v) for k, v in navset.items()
+                         if k not in d["nav"] and isinstance(k, str) and NAV_KEY_RE.fullmatch(k)})
     if "sfx_enabled" in raw:
         d["sfx_enabled"] = bool(raw.get("sfx_enabled"))
     if "bgm_enabled" in raw:
@@ -255,7 +259,9 @@ def sanitize(raw, base=None):
         d["plugins"] = {k: {"enabled": bool(v.get("enabled", True))} for k, v in plugins.items()
                         if isinstance(k, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,31}", k) and isinstance(v, dict)}
     # Older custom layouts remain custom; reading settings never resets them.
-    is_standard = all(d[key] == value for key, value in standard_presentation().items())
+    # Every menu shown counts as standard, whichever per-page keys are stored.
+    is_standard = all(all(d[key].values()) if key == "nav" else d[key] == value
+                      for key, value in standard_presentation().items())
     d["presentation_mode"] = "custom" if raw.get("presentation_mode") == "custom" or not is_standard else "standard"
     return d
 
@@ -271,9 +277,17 @@ def load_settings():
 
 def save_settings(raw):
     """POST /settings のペイロードを検証・正規化して保存し、正規化後の dict を返す。"""
-    if isinstance(raw, dict) and "plugins" not in raw:
-        # The Settings page does not send plugin activation; keep what is saved.
-        raw = {**raw, "plugins": load_settings()["plugins"]}
+    current = load_settings()
+    raw_in = raw if isinstance(raw, dict) else {}
+    if isinstance(raw, dict) and raw.get("reset"):
+        raw = {"plugins": current["plugins"]}
+    elif isinstance(raw, dict):
+        # The Settings page no longer edits plugin activation, the name or home sections
+        # (2026-10-11); keep what is saved for fields the payload leaves out.
+        raw = {**{k: current[k] for k in ("plugins", "name", "sections", "order")}, **raw}
+        if raw.get("presentation_mode") == "standard" and "sections" not in raw_in:
+            # Standard restores the home layout the page can no longer edit.
+            raw.update({k: standard_presentation()[k] for k in ("sections", "order")})
     d = sanitize(raw)
     SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
     SETTINGS_FILE.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")

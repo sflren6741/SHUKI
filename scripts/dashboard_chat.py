@@ -37,7 +37,7 @@ MODEL_USAGE_EXEMPT_JSON = json.dumps(model_registry.usage_exempt_dashboard_model
 # 対話ドックの意味的アイコンは dashboard_icons.UI_PATHS を単一情報源にする。
 # HTML の静的部分と JS の動的メッセージの両方が同じ SVG を使うため、ここで一度だけ組み立てる。
 _CHAT_ICON_KEYS = ("play", "stop", "refresh", "speaker", "maximize", "minimize", "shrink", "cross", "attach",
-                   "mic", "send", "hourglass", "check", "comment", "clock", "warn", "pencil", "settings", "copy")
+                   "mic", "mic-off", "send", "hourglass", "check", "comment", "clock", "warn", "pencil", "settings", "copy")
 
 # The server supplies its existing launcher catalog; the dock owns no duplicate list.
 _skill_catalog_getter = lambda: []
@@ -91,9 +91,9 @@ CSS = r'''
      気にせず画面を使い切るための状態。閉じる・最小化とは独立（畳んでも記憶する）。 */
   #result.maxi:not([hidden]) { left:16px; top:16px; right:16px; bottom:16px;
     width:auto; max-height:none; }
-  .result-head { display:flex; align-items:center; gap:10px; margin-bottom:8px; font-weight:bold;
-    flex:0 0 auto; flex-wrap:wrap; min-width:0; }
-  #result-title { min-width:0; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .result-head { display:flex; align-items:center; gap:6px; margin-bottom:8px; font-weight:bold;
+    flex:0 0 auto; flex-wrap:nowrap; min-width:0; }
+  #result-title { flex:1 1 auto; min-width:0; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   /* モデル選択（2026-09-27 チップ列→ドロップダウン化）: ドック常設。旧・ホーム画面専用の
      独立バーを吸収し、対話の途中（フォローアップ発言）はここで選んだモデルがそのまま次発言から
      効く。9モデル分のチップが折り返して3行を占め、スマホでチャットログの取り分を圧迫していた
@@ -102,7 +102,65 @@ CSS = r'''
      切り替えられる（一発実行スキル（[data-exec-skill]）だけは、押した時点でドックが未オープンの
      ためこのUIに事前に触れる手段が無い → model-pick popup で補う（下記）。 */
   .model-row { display:flex; align-items:center; gap:6px; margin-bottom:6px; font-size:.78rem;
-    flex:0 0 auto; }
+    flex:0 0 auto; min-width:0; }
+  .chat-control { min-width:0; flex:0 1 auto; }
+  .chat-control:first-of-type { flex:1 1 0; }
+  .chat-control[hidden] { display:none; }
+  .chat-control-source, .chat-control-label, #chat-model-status {
+    position:absolute; width:1px; height:1px; padding:0; overflow:hidden;
+    clip-path:inset(50%); white-space:nowrap; }
+  /* 密度（🖥 UIデザイン原則 §6.2・2026-10-11）: 見た目は S段 32px、押せる範囲は透明な ::before で
+     上下に6px（border分を含め inset -7px）足して44pxにする。旧実装は見た目の箱を44pxにしていて「縦に長い」と言われた。 */
+  .chat-control-button { position:relative; display:flex; align-items:center; gap:5px; width:100%; min-width:44px;
+    height:32px; box-sizing:border-box; border:1px solid var(--line); border-radius:999px;
+    padding:0 12px; background:var(--card); color:var(--fg); font:inherit; cursor:pointer; }
+  .chat-control-button::before { content:''; position:absolute; inset:-7px -1px; }
+  .chat-control-button span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+  .chat-control-button::after { content:''; width:5px; height:5px; flex:none; margin-left:auto;
+    border-right:1.5px solid currentColor; border-bottom:1.5px solid currentColor; transform:rotate(45deg); }
+  .chat-control-button:hover:not(:disabled) { border-color:var(--accent); }
+  .chat-control-button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .chat-control-button:disabled { opacity:.55; cursor:default; }
+  .chat-control-button[data-state="done"] { color:var(--ok); }
+  .chat-control-button[data-state="waiting"] { color:var(--warn); }
+  .chat-control-button.mchip-risk { color:var(--danger); border-color:var(--danger); }
+  .chat-control-dialog { position:fixed; margin:0; box-sizing:border-box; width:min(360px,calc(100vw - 16px));
+    max-width:none; max-height:min(65svh,560px); padding:12px; border:1px solid var(--line);
+    border-radius:12px; background:var(--card); color:var(--fg); font:inherit; }
+  .chat-control-dialog::backdrop { background:color-mix(in srgb,var(--fg) 18%,transparent); }
+  .chat-control-dialog-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .chat-control-dialog-head button { min-height:44px; min-width:44px; }
+  .chat-control-help { color:var(--muted); font-size:.78rem; margin:4px 0 10px; }
+  .chat-control-options { display:flex; flex-direction:column; gap:6px; }
+  .chat-control-option { display:flex; align-items:center; gap:10px; text-align:left; width:100%;
+    box-sizing:border-box; min-height:44px; padding:10px 12px; border:1px solid var(--line);
+    border-radius:8px; background:var(--card); color:var(--fg); font:inherit; cursor:pointer;
+    overflow-wrap:anywhere; }
+  .chat-control-option::before { content:''; width:14px; height:14px; flex:none;
+    border:1px solid currentColor; border-radius:50%; }
+  .chat-control-option[aria-checked="true"] { border-color:var(--accent);
+    box-shadow:inset 0 0 0 1px var(--accent); background:var(--surface-highlight); }
+  .chat-control-option[aria-checked="true"]::before {
+    background:radial-gradient(circle,var(--accent) 0 4px,transparent 4.5px); }
+  .chat-control-option:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+  /* 状態ドット（§6.2④）: 色＋形で区別する。Open＝中抜きの灰リング／Waiting＝--warn 塗り／Done＝--ok 塗り。
+     light では --warn が --info と同じ青なので、色だけに頼らず「塗りか中抜きか」も変える。 */
+  .chat-control-button:is([data-state="open"],[data-state="waiting"],[data-state="done"]) > span::before,
+  .chat-control-option[data-state]::before { content:''; display:inline-block; width:8px; height:8px;
+    margin-right:6px; flex:none; box-sizing:border-box; border-radius:50%; vertical-align:1px;
+    border:1.5px solid var(--muted); background:transparent; }
+  .chat-control-option[data-state]::before { margin-right:0; }
+  .chat-control-button[data-state="waiting"] > span::before,
+  .chat-control-option[data-state="waiting"]::before { border-color:var(--warn); background:var(--warn); }
+  .chat-control-button[data-state="done"] > span::before,
+  .chat-control-option[data-state="done"]::before { border-color:var(--ok); background:var(--ok); }
+  .chat-control-option[data-state][aria-checked="true"]::before { background-image:none; }  /* 選択は枠＋淡い面で示す */
+  @media(max-width:700px) {
+    .chat-control-dialog { inset:auto 8px 8px !important; width:auto; max-height:75svh;
+      border-radius:16px; padding:14px 14px max(14px,env(safe-area-inset-bottom)); }
+    .chat-control-button { padding:0 10px; font-size:.72rem; }
+    #chat-session-state { max-width:42%; }
+  }
   .model-select, .effort-select { border:1px solid var(--line); border-radius:8px; background:var(--bg);
     color:var(--fg); font-family:inherit; font-size:.78rem; padding:3px 6px; }
   .model-select { flex:1 1 auto; min-width:0; }
@@ -111,7 +169,9 @@ CSS = r'''
   .effort-select[hidden] { display:none; }
   .model-select:focus, .effort-select:focus { outline:none; border-color:var(--accent); }
   .model-select.mchip-risk { border-color:var(--red); color:var(--red); }
-  .auto-model-status { color:var(--muted); font-size:.7rem; min-height:1em; flex:0 0 auto; }
+  .auto-model-status { color:var(--muted); font-size:.7rem; flex:0 0 auto; }
+  .auto-model-status:empty, #chat-session-state-message:empty { display:none; }
+  #chat-session-state-message { margin-bottom:6px; color:var(--muted); font-size:.76rem; overflow-wrap:anywhere; }
   /* モデル選択ポップアップ（2026-08-16）: スキルボタン（[data-exec-skill]）を押した瞬間は
      まだドックが開いておらず常設チップに触れないため、ここでモデルだけ先に選ばせてから
      ドックへ実行結果を出す。選ぶと即実行＝確認ボタンを別途置かない（タップ数を増やさない）。 */
@@ -159,7 +219,14 @@ CSS = r'''
   #result-mini .rm-close { flex-shrink:0; color:var(--muted); padding:0 2px; }
   #result-mini .rm-close:hover { color:var(--red); }
   #result-mini.unread { border-color:var(--teal); animation:achnewpulse 1.6s ease-in-out infinite; }
-  .result-actions { margin-left:auto; display:flex; flex-wrap:wrap; gap:8px; max-width:100%; }
+  .result-actions { margin-left:auto; display:flex; flex-wrap:nowrap; align-items:center; gap:4px;
+    flex:0 0 auto; max-width:100%; }
+  /* ヘッダーの操作ボタン（§6.2 XS段）: 全幅でアイコンのみの 28px 正方形・1行。押せる範囲は ::before で
+     上下8px（border 1px 分を足して inset -9px・＝44px）、左右は隣と重ならない2pxだけ広げる。意味は title / aria-label が持つ。 */
+  .result-actions .rbtn, .chat-history-head .rbtn { position:relative; width:28px; height:28px;
+    padding:0; box-sizing:border-box; flex:none; }
+  .result-actions .rbtn::before, .chat-history-head .rbtn::before { content:''; position:absolute; inset:-9px -3px; }
+  .result-actions .rbtn-label { display:none; }
   .rbtn { background:none; border:1px solid var(--line); color:var(--muted); border-radius:8px;
     padding:3px 10px; cursor:pointer; font-size:.8rem; text-decoration:none; font-family:inherit; }
   .rbtn:hover { color:var(--fg); border-color:var(--accent); }
@@ -167,20 +234,47 @@ CSS = r'''
   /* ヘッダーの操作ボタン列（2026-09-27）: スマホ幅ではラベル文字を隠しアイコンのみにする
      （下の @media 700px ブロックで .rbtn-label を display:none）。アイコンだけでは何のボタンか
      わからなくなるので title は必ず添える＝アイコンのみでもアクセシブルネームは保つ。 */
-  #voice-bar { padding:8px 12px; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  /* 音声バー（2026-10-10 刷新）：入力欄の上の1行ピル。[マイク(ミュート)] 状態 [EN] [⚙] [×]。
+     状態色は data-state（listening/hearing/thinking/muted/error/off）だけで切り替え、
+     マイクの波紋は --lvl（0〜1・tick() が40msごとに更新）で声の大きさに追従させる。 */
+  #voice-bar { --vb:var(--accent); position:relative; display:flex; align-items:center; gap:6px;
+    margin:0 0 6px; padding:4px 4px 4px 4px; border:1px solid color-mix(in srgb, var(--vb) 35%, var(--line));
+    border-radius:999px; background:color-mix(in srgb, var(--vb) 7%, var(--card)); }
   #voice-bar[hidden] { display:none; }
-  /* 2026-09-14: 音声会話中の言語/宛先/ポーズ設定は常時展開だと縦に何段も積み上がり、
-     モバイルでは「設定画面」がほぼ画面全体を占めて会話が見えなくなっていた。
-     既定で畳んでおき、必要な時だけ開く（閉じるボタンの代わりに details で自己完結）。 */
-  #voice-settings { flex-basis:100%; }
-  #voice-settings > summary { cursor:pointer; color:var(--muted); font-size:.78rem; min-height:26px;
-    display:flex; align-items:center; list-style:none; }
+  #voice-bar[data-state="muted"], #voice-bar[data-state="off"] { --vb:var(--muted); }
+  #voice-bar[data-state="error"] { --vb:var(--danger); }
+  #voice-bar .vb-mic { --lvl:0; flex:none; width:40px; height:40px; min-height:40px; border-radius:50%;
+    border:0; padding:0; display:grid; place-items:center; cursor:pointer; color:#fff; background:var(--vb);
+    box-shadow:0 0 0 calc(3px + var(--lvl) * 9px) color-mix(in srgb, var(--vb) 22%, transparent);
+    transition:box-shadow .08s linear, background .15s; }
+  #voice-bar .vb-mic .chat-icon { width:18px; height:18px; margin:0; }
+  #voice-bar[data-state="muted"] .vb-mic, #voice-bar[data-state="off"] .vb-mic,
+  #voice-bar[data-state="error"] .vb-mic { color:var(--vb); background:transparent;
+    box-shadow:inset 0 0 0 1.5px currentColor; }
+  #voice-bar[data-state="thinking"] .vb-mic { animation:pulse 1.4s ease-in-out infinite; }
+  #voice-status { flex:1 1 auto; min-width:0; font-size:.82rem; white-space:nowrap; overflow:hidden;
+    text-overflow:ellipsis; color:var(--fg); }
+  #voice-bar[data-state="muted"] #voice-status, #voice-bar[data-state="off"] #voice-status { color:var(--muted); }
+  #voice-bar[data-state="error"] #voice-status { color:var(--danger); white-space:normal; }
+  #voice-bar .vb-chip { flex:none; min-height:28px; padding:0 9px; border-radius:999px; cursor:pointer;
+    border:1px solid var(--line); background:var(--bg); color:var(--muted); font:600 .72rem/1 inherit;
+    letter-spacing:.04em; }
+  #voice-bar .vb-chip:hover { color:var(--fg); }
+  #voice-bar .vb-icon { flex:none; width:34px; height:34px; min-height:34px; border-radius:50%; border:0;
+    padding:0; display:grid; place-items:center; cursor:pointer; color:var(--muted); background:none;
+    list-style:none; }
+  #voice-bar .vb-icon:hover, #voice-settings[open] > summary { color:var(--fg);
+    background:color-mix(in srgb, var(--line) 55%, transparent); }
+  #voice-bar .vb-icon .chat-icon { margin:0; }
+  #voice-bar .vb-end:hover { color:var(--danger); }
+  #voice-bar .rbtn { min-height:32px; border-radius:999px; }
+  /* 2026-09-14: 設定は既定で畳む。2026-10-10: 開いても行を増やさないよう、バーの上に浮かせる。 */
+  #voice-settings { flex:none; }
   #voice-settings > summary::-webkit-details-marker { display:none; }
-  #voice-settings[open] > summary { color:var(--fg); }
-  /* 2026-09-27: ラベルを短縮しフォントを一段落とし、開いた時に占める行数を減らした
-     （「Recognition and replies」等の長い文言が折り返して2〜3行になっていた）。 */
-  #voice-settings-fields { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-top:4px;
-    font-size:.74rem; color:var(--muted); }
+  #voice-settings-fields { position:absolute; right:6px; bottom:calc(100% + 6px); z-index:2;
+    display:flex; gap:12px; flex-wrap:wrap; align-items:center; padding:8px 10px;
+    background:var(--card); border:1px solid var(--line); border-radius:10px; box-shadow:0 6px 20px #00000030;
+    font-size:.76rem; color:var(--muted); }
   #voice-settings-fields label { display:flex; align-items:center; gap:4px; }
   #voice-settings-fields select { font-size:.76rem; padding:2px 4px; }
   #voice-work-card { margin:0 12px 8px; padding:10px; border:1px solid var(--line);
@@ -191,6 +285,49 @@ CSS = r'''
      toggleWorkTab()/exitWorkTab() が排他的に切り替えるだけで、CSS側の特別な分岐は不要。 */
   #conversation-view { display:flex; flex-direction:column; flex:1 1 auto; min-height:0; min-width:0; }
   #conversation-view[hidden] { display:none; }
+  /* 🧭 プロンプトレール（2026-10-11 ユーザーの投函メモ）: 長い対話で自分の発言を探す時、スクロールで
+     流し読みせず「発言単位」で遡れるようにする。#chat-log の右端に自分の発言1件＝横棒1本を並べ、
+     タップで飛ぶ／棒の上をなぞる・ホイールで隣の発言へ移る。今いる発言の棒だけ長く・アクセント色にする。
+     棒の間隔は件数に応じて縮む（レール自体はスクロールしない＝なぞり操作と競合させない）。 */
+  #conversation-view { position:relative; }
+  /* Float over the log without reserving message width; empty rail space passes through to the log. */
+  #prompt-rail { position:absolute; right:0; z-index:2; width:28px; box-sizing:border-box; padding:8px 0;
+    display:flex; flex-direction:column; justify-content:center; align-items:stretch; overflow:hidden;
+    border:0; background:none; pointer-events:none; isolation:isolate;
+    opacity:0; visibility:hidden; transition:opacity .18s ease, visibility .18s;
+    touch-action:none; user-select:none; -webkit-user-select:none; }
+  #prompt-rail.scrolling, #prompt-rail:focus-within { opacity:1; visibility:visible; }
+  #prompt-rail[hidden], #prompt-rail-tip[hidden] { display:none; }
+  .pr-bar { flex:0 1 22px; min-height:3px; width:100%; padding:0; margin:0; border:0; background:none;
+    cursor:pointer; pointer-events:auto; display:flex; align-items:center; justify-content:flex-end; -webkit-tap-highlight-color:transparent; }
+  .pr-bar::before { content:''; display:block; width:12px; height:3px; border-radius:2px;
+    background:var(--muted);
+    transition:width .15s ease, height .15s ease, background-color .15s ease; }
+  .pr-bar:hover::before { width:16px; background:var(--fg); }
+  .pr-bar.on::before { width:26px; height:4px; background:var(--accent); }
+  .pr-bar:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; border-radius:4px; }
+  #prompt-rail-tip { position:absolute; right:34px; z-index:3; max-width:min(70%, 320px); box-sizing:border-box;
+    padding:10px 14px; background:none; color:var(--fg); border:0; isolation:isolate;
+    font-size:.78rem; line-height:1.5; pointer-events:none;
+    display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; overflow-wrap:anywhere; }
+  /* Fade only the backing surface on all four edges; keep markers and preview text sharp.
+     Browsers without masks simply show no backing surface. */
+  @supports (mask-image:linear-gradient(transparent, black)) {
+    #prompt-rail::before, #prompt-rail-tip::before { content:''; position:absolute; inset:0;
+      z-index:-1; pointer-events:none;
+      background:linear-gradient(to right, transparent, color-mix(in srgb, var(--card) 88%, transparent) 30%,
+        color-mix(in srgb, var(--card) 88%, transparent) 70%, transparent);
+      mask-image:linear-gradient(to bottom, transparent, black 10px, black calc(100% - 10px), transparent); }
+    #prompt-rail::before { opacity:.65; }
+    #prompt-rail-tip::before { background:linear-gradient(to right, transparent,
+      color-mix(in srgb, var(--card) 96%, transparent) 10px,
+      color-mix(in srgb, var(--card) 96%, transparent) calc(100% - 10px), transparent); }
+  }
+  @media (prefers-reduced-transparency: reduce), (forced-colors: active) {
+    #prompt-rail, #prompt-rail-tip { background:var(--card); }
+    #prompt-rail::before, #prompt-rail-tip::before { display:none; }
+  }
+  @media (prefers-reduced-motion: reduce) { #prompt-rail, .pr-bar::before { transition:none; } }
   #voice-work-card[hidden], #voice-proposal[hidden], #voice-work-progress[hidden] { display:none; }
   #voice-work-card button { min-height:44px; margin-top:6px; }
   #voice-work-progress { display:flex; flex-direction:column; gap:4px; flex:1; min-height:0; min-width:0; }
@@ -234,10 +371,7 @@ CSS = r'''
   .voice-sources { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; font-size:.78rem; }
   .voice-sources a { border:1px solid var(--line); border-radius:8px; padding:6px 9px;
     color:var(--muted); text-decoration:underline; overflow-wrap:anywhere; }
-  #voice-status { flex:1 1 150px; font-size:.8rem; overflow-wrap:anywhere; }
-  #voice-language { font-weight:600; color:var(--teal); white-space:nowrap; }
   #result [hidden] { display:none !important; }
-  #voice-bar button, #voice-bar select, #voice-btn { min-height:44px; }
   @keyframes pulse { 50% { opacity:.4; } }
   .msg-actions { display:flex; align-items:center; gap:4px; margin-top:4px; }
   .msg-copy, .msg-speak { display:inline-flex; align-items:center; justify-content:center; gap:4px;
@@ -255,13 +389,17 @@ CSS = r'''
   /* 🗂 タブ帯（2026-09-25）: 複数の対話セッションを切り替える。1本しか無くても常設して
      「＋」で増やせることを常に見せる。非アクティブなタブのDOM(.tab-pane)は消さず隠すだけ
      （poll() が背後で書き込み続けられるようにするため）。 */
+  /* 密度（§6.2・2026-10-11）: タブは S段 32px の1行。名前とモデルを2段に積んでいたのを横並びにし、
+     モデルは淡色の補足にする（デモ候補B）。行が overflow-x:auto なので ::before の当たり判定は
+     切られる＝タブは見た目どおりの 32px（WCAG 2.2 AA の 24px は満たす）。 */
   .chat-tabs { display:flex; gap:4px; margin-bottom:6px; overflow-x:auto; flex:0 0 auto; }
-  .chat-tab { display:flex; align-items:center; gap:5px; padding:4px 8px 4px 10px; border-radius:14px;
+  .chat-tab { display:flex; align-items:center; gap:5px; height:32px; min-height:32px; box-sizing:border-box;
+    padding:0 8px 0 12px; border-radius:999px;
     border:1px solid var(--line); background:none; color:var(--muted); font-size:.76rem;
-    cursor:pointer; white-space:nowrap; flex:0 0 auto; max-width:150px; font-family:inherit; }
-  .chat-tab .ct-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:100px; }
-  .chat-tab .ct-text { display:flex; flex-direction:column; min-width:0; text-align:left; }
-  .chat-tab .ct-model { overflow:hidden; text-overflow:ellipsis; font-size:.65rem;
+    cursor:pointer; white-space:nowrap; flex:0 0 auto; max-width:240px; font-family:inherit; }
+  .chat-tab .ct-label { flex:0 0 auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:140px; }
+  .chat-tab .ct-text { display:flex; align-items:baseline; gap:6px; min-width:0; text-align:left; }
+  .chat-tab .ct-model { flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:.65rem;
     font-weight:normal; color:var(--muted); }
   .chat-model-status { flex:0 0 auto; margin-bottom:6px; font-size:.72rem;
     color:var(--muted); overflow-wrap:anywhere; }
@@ -277,7 +415,8 @@ CSS = r'''
   .chat-tab.work-tab.active { border-color:var(--accent); color:var(--accent); border-style:solid; }
   .chat-tab .ct-close { display:flex; opacity:.55; border-radius:50%; }
   .chat-tab .ct-close:hover { opacity:1; color:var(--red); }
-  .chat-tab-add { flex:0 0 auto; border:1px dashed var(--line); border-radius:14px; padding:3px 11px;
+  .chat-tab-add { flex:0 0 auto; width:32px; height:32px; min-height:32px; box-sizing:border-box;
+    border:1px dashed var(--line); border-radius:999px; padding:0;
     background:none; color:var(--muted); cursor:pointer; font-size:.9rem; font-family:inherit; line-height:1.4; }
   .chat-tab-add:hover:not(:disabled) { border-color:var(--accent); color:var(--fg); }
   .chat-tab-add:disabled { opacity:.4; cursor:default; }
@@ -306,6 +445,26 @@ CSS = r'''
   #chat-log pre.cm-code code { background:none; padding:0; }
   #chat-log .cm-p img { max-width:100%; border-radius:6px; margin:4px 0; display:block; }
   #chat-log .cm-p a { color:var(--accent); }
+  /* 見やすさ（2026-10-10）：冒頭の結論1文を一段強く・==マーカー==・意味色の固まり・コールアウト。
+     色は面全体の淡い塗り＋同系の細枠で持たせ、一辺だけの帯は使わない（角丸で色が欠けるため）。 */
+  #chat-log .chat-msg.assistant > .cm-p:first-child:has(+ :not(.msg-actions)) { font-size:.94rem; font-weight:600; line-height:1.6; }
+  #chat-log mark.cm-mark { background:color-mix(in srgb, var(--accent) 22%, transparent); color:inherit;
+    border-radius:3px; padding:0 3px; font-weight:600; }
+  #chat-log .cm-sec, #chat-log .cm-callout { --sec:var(--muted); margin:8px 0; padding:7px 10px 8px;
+    border-radius:8px; background:color-mix(in srgb, var(--sec) 9%, transparent);
+    border:1px solid color-mix(in srgb, var(--sec) 30%, transparent); }
+  #chat-log .cm-sec:first-child, #chat-log .cm-callout:first-child { margin-top:0; }
+  #chat-log .cm-sec-ok { --sec:var(--ok); }
+  #chat-log .cm-sec-issue { --sec:var(--danger); }
+  #chat-log .cm-sec-decide { --sec:var(--accent); border-width:2px; }
+  #chat-log .cm-sec-next, #chat-log .cm-sec-info { --sec:var(--info); }
+  #chat-log .cm-sec-label { display:flex; align-items:center; gap:6px; margin-bottom:3px;
+    font-size:.74rem; font-weight:700; letter-spacing:.04em; text-transform:uppercase; color:var(--sec); }
+  #chat-log .cm-sec-label .chat-icon { flex:none; }
+  #chat-log .cm-sec .cm-list, #chat-log .cm-callout .cm-list { margin-bottom:0; }
+  #chat-log .cm-sec > :last-child, #chat-log .cm-callout > :last-child { margin-bottom:0; }
+  #chat-log .cm-quote { margin:6px 0; padding:2px 10px; color:var(--muted);
+    border-radius:6px; background:color-mix(in srgb, var(--line) 45%, transparent); }
   /* Long paths and URLs must wrap without widening the shared scroll area. */
   .chat-msg { padding:8px 10px; border-radius:10px; min-width:0; max-width:100%;
     box-sizing:border-box; overflow-wrap:anywhere; }
@@ -324,8 +483,13 @@ CSS = r'''
   .queued-note button:hover { border-color:var(--accent); }
   @keyframes blink { 50% { opacity:0; } }
   .chat-input-row { display:flex; flex-wrap:nowrap; gap:6px; flex:0 0 auto; position:relative; }
-  .chat-input-row > .rbtn { flex:0 0 auto; width:44px; min-height:44px; padding:6px;
+  /* 入力行（§6.2 M段）: 入力欄と3つのボタンを 40px で揃える。押せる範囲は ::before で上下2px＋border分
+     （inset -3px）足して 44px。左右は隣と重ならないよう border 分だけ。 */
+  .chat-input-row { align-items:center; }
+  .chat-input-row > .rbtn { position:relative; flex:0 0 auto; width:40px; height:40px; min-height:40px; padding:0;
     box-sizing:border-box; display:inline-flex; align-items:center; justify-content:center; }
+  .chat-input-row > .rbtn::before { content:''; position:absolute; inset:-3px -1px; }
+  .chat-input-row > input { height:40px; min-height:40px; box-sizing:border-box; }
   .chat-input-row > .rbtn .chat-icon, .result-actions .rbtn .chat-icon { margin:0; display:block; }
   .result-actions .rbtn { display:inline-flex; align-items:center; justify-content:center; gap:3px; }
   .result-actions .rbtn[hidden] { display:none; }
@@ -334,7 +498,6 @@ CSS = r'''
     background:var(--card); border:1px solid var(--line); border-radius:10px; }
   .chat-history[hidden] { display:none; }
   .chat-history-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
-  .chat-history-head .rbtn, #history-btn { min-width:44px; min-height:44px; }
   .chat-history input { width:100%; min-width:0; min-height:44px; box-sizing:border-box;
     background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:8px;
     padding:8px; font:inherit; font-size:.82rem; }
@@ -345,6 +508,13 @@ CSS = r'''
   .chat-history-item:hover { border-color:var(--accent); }
   .chat-history-title { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
   .chat-history-item small { display:block; color:var(--muted); margin-top:3px; }
+  .chat-history-summary { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;
+    overflow:hidden; overflow-wrap:anywhere; margin-top:4px; font-weight:normal; }
+  .chat-session-state { min-width:0; flex:0 1 auto; }
+  .chat-session-state[hidden] { display:none; }
+  .chat-session-state select { min-height:44px; max-width:180px; border:1px solid var(--line);
+    border-radius:8px; background:var(--surface-control); color:var(--fg); font:inherit; }
+  .chat-session-state span { color:var(--muted); overflow-wrap:anywhere; }
   .chat-history-message { margin:0; color:var(--muted); font-size:.76rem; }
   .chat-history :focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
   .chat-input-row input { flex:1 1 0; min-width:0; background:var(--bg); border:1px solid var(--line); border-radius:8px;
@@ -445,9 +615,6 @@ CSS = r'''
   .choice-btns .choice-send:not(:disabled) { background:var(--accent); border-color:var(--accent);
     color:var(--bg); font-weight:700; }
   .choice-btns .choice-send:hover:not(:disabled) { background:var(--accent); color:var(--bg); filter:brightness(1.08); }
-  /* 履歴復旧の「更新／履歴」は選択肢でなく操作ボタンなので横並びのまま */
-  .history-status .choice-btns { flex-direction:row; flex-wrap:wrap; }
-  .history-status .choice-btns .choice-btn { width:auto; justify-content:center; }
   /* 💬 常設の丸ボタン（2026-08-13 ユーザーの投函メモ）: ホーム以外のページでは対話パネルを開く
      導線がホームの「Claude」チップにしかなく、毎回ホームへ戻る必要があった。全ページの
      右下に常時置き、押せば openChat() でその場から自由入力を始められる。ドックが開いて
@@ -491,8 +658,6 @@ CSS = r'''
        これでチャットログの取り分がスマホで大きく増える（title属性はそのまま残すのでアイコンのみ
        でも押せるボタンの意味は伝わる）。 */
     .rbtn-label { display:none; }
-    .result-head .rbtn { padding:5px 8px; }
-    .result-head { gap:6px; }
   }
 
 '''
@@ -529,15 +694,34 @@ HTML = r'''
     <p id="chat-history-message" class="chat-history-message" role="status" aria-live="polite"></p>
     <div id="chat-history-results" class="chat-history-results"></div>
   </section>
-  <div class="model-row" id="model-row">
-    <label for="model-select" title="Shared setting for the next reply in any tab">Next reply</label>
-    __MODEL_SELECT__ __EFFORT_SELECT__
-    <span id="auto-model-status" class="auto-model-status" role="status" aria-live="polite"></span>
-  </div>
   <div id="chat-tabs" class="chat-tabs"></div>
+  <div class="model-row" id="model-row" aria-label="Conversation controls">
+    <label class="chat-control-label" for="model-select">Next reply</label>
+    <div class="chat-control" data-control="model-select" data-label="Model for next reply">
+      __MODEL_SELECT__
+      <button id="model-control" type="button" class="chat-control-button" aria-haspopup="dialog"
+        aria-controls="chat-control-dialog" aria-expanded="false" onclick="openChatControl('model-select')"><span></span></button>
+    </div>
+    <div class="chat-control" data-control="effort-select" data-label="Effort for next reply">
+      __EFFORT_SELECT__
+      <button id="effort-control" type="button" class="chat-control-button" aria-haspopup="dialog"
+        aria-controls="chat-control-dialog" aria-expanded="false" onclick="openChatControl('effort-select')"><span></span></button>
+    </div>
+    <div id="chat-session-state" class="chat-control chat-session-state" data-control="chat-session-status"
+      data-label="Work status" hidden>
+      <select id="chat-session-status" onchange="saveChatSessionStatus()" aria-label="Session work status"></select>
+      <button id="work-status-control" type="button" class="chat-control-button" aria-haspopup="dialog"
+        aria-controls="chat-control-dialog" aria-expanded="false" onclick="openChatControl('chat-session-status')"><span></span></button>
+    </div>
+  </div>
+  <span id="auto-model-status" class="auto-model-status" role="status" aria-live="polite"></span>
   <div id="chat-model-status" class="chat-model-status" role="status" aria-live="polite"></div>
+  <span id="chat-session-state-message" role="status" aria-live="polite"></span>
   <div id="conversation-view">
     <div id="chat-log"></div>
+    <!-- プロンプトレール（2026-10-11）：自分の過去の発言を右端の横棒で並べ、タップ／なぞり／ホイールでその発言へ飛ぶ -->
+    <nav id="prompt-rail" aria-label="Your earlier prompts" hidden></nav>
+    <div id="prompt-rail-tip" aria-hidden="true" hidden></div>
     <div id="voice-conversation-hint" hidden>Talk it through. Ask me to check a note, make something, or change what we’re working on.</div>
     <div id="voice-proposal" hidden>
       <strong>Here’s what I’ll make</strong>
@@ -546,22 +730,27 @@ HTML = r'''
       <div id="voice-proposal-error" role="status"></div>
       <button id="voice-work-start" class="rbtn" aria-label="Start approved work" onclick="voiceChat.startWork()">Go ahead</button>
     </div>
-    <div id="voice-bar" hidden>
+    <!-- 音声バー（2026-10-10 刷新）：1行のピル。マイク＝ミュート切替（雑音の多い場所で何度も切る想定）、
+         ×＝音声会話を終える。状態は data-state で色と波紋に出し、文言は1行に収める。 -->
+    <div id="voice-bar" data-state="off" hidden>
+      <button id="voice-mute" type="button" class="vb-mic" aria-pressed="false" onclick="voiceMicButton()"
+        title="Mute microphone" aria-label="Mute microphone">__ICON_MIC__</button>
       <span id="voice-status" role="status" aria-live="polite">Microphone off</span>
-      <span id="voice-language" title="Active voice language">English</span>
-      <button class="rbtn" onclick="voiceChat.end()">End voice</button>
+      <button id="voice-language" type="button" class="vb-chip" title="Voice language: English — tap to switch"
+        onclick="voiceChat.setLanguage(voiceChat.language === 'ja' ? 'en' : 'ja')">EN</button>
       <button id="voice-ielts-finish" class="rbtn" hidden onclick="finishIELTSSpeaking()">Finish &amp; score</button>
       <button id="voice-ielts-answer" class="rbtn" hidden onclick="voiceChat.sendPracticeAnswer()">Send answer</button>
       <details id="voice-settings">
-        <summary>__ICON_SETTINGS__ 設定</summary>
+        <summary class="vb-icon" title="Voice settings" aria-label="Voice settings">__ICON_SLIDERS__</summary>
         <div id="voice-settings-fields">
           <label title="Recognition and replies language">Lang <select id="voice-language-select" onchange="voiceChat.setLanguage(this.value)">
             <option value="en">EN</option><option value="ja">JA</option></select></label>
-          <span title="Voice: GPT-5.6 Luna">__ICON_SPEAKER__ Luna</span>
           <label>Pause <select id="voice-pause"><option value="1500" selected>1.5 s</option>
             <option value="2500">2.5 s</option><option value="4000">4 s</option></select></label>
         </div>
       </details>
+      <button id="voice-end" type="button" class="vb-icon vb-end" onclick="voiceEndButton()"
+        title="End voice chat" aria-label="End voice chat">__ICON_CROSS__</button>
     </div>
     <div id="chat-attach" class="chat-attach" hidden></div>
     <div id="chat-input-row" class="chat-input-row" hidden>
@@ -591,7 +780,7 @@ HTML = r'''
       <input id="chat-file" type="file" accept="image/*,.pdf,.txt,.md,.csv" hidden
         onchange="onFilePick(this)">
       <input id="chat-input" type="text" placeholder="続きを入力…（Enterで送信）"
-        oninput="updateSendBtn()" onfocus="updateSendBtn()"
+        oninput="rememberChatDraft();updateSendBtn()" onfocus="updateSendBtn()"
         onkeydown="if(event.key==='Enter'){sendFollowup();return false;}">
       <button id="chat-add-btn" type="button" class="rbtn" onclick="toggleChatAddMenu()"
         title="Add attachments or skills" aria-label="Add attachments or skills"
@@ -635,6 +824,13 @@ HTML = r'''
 <button id="chat-fab" onclick="openChat('Omnipus')" title="Chat with Omnipus" aria-label="Chat with Omnipus">
   __MASCOT_SPRITE__
 </button>
+<dialog id="chat-control-dialog" class="chat-control-dialog" aria-labelledby="chat-control-title"
+  aria-describedby="chat-control-help">
+  <div class="chat-control-dialog-head"><strong id="chat-control-title"></strong>
+    <button type="button" class="rbtn" aria-label="Close choices" onclick="closeChatControl()">__ICON_CROSS__</button></div>
+  <p id="chat-control-help" class="chat-control-help"></p>
+  <div id="chat-control-options" class="chat-control-options" role="menu" aria-labelledby="chat-control-title"></div>
+</dialog>
 <dialog id="model-pick-overlay" class="model-pick-overlay" aria-labelledby="model-pick-title" hidden
   onclick="if(event.target===this) cancelModelPick()">
   <div class="model-pick-card">
@@ -679,6 +875,86 @@ JS = r'''
   // 各ページの静的アプリJS（activity/concept_game/finance_game/habit_funnel）が別の意味の $ を
   // const 宣言しているため、ドック側は名前を分けて衝突を避ける（2026-08-11）。
   const byId = id => document.getElementById(id);
+  // Keep existing select handlers/stores; these buttons only present their choices.
+  let chatControlSource = null;
+  function syncChatControls() {
+    document.querySelectorAll('#model-row [data-control]').forEach(wrapper => {
+      const select = byId(wrapper.dataset.control), button = wrapper.querySelector('button');
+      if (select.id !== 'chat-session-status') wrapper.hidden = select.hidden;
+      else button.hidden = select.hidden;
+      const label = select.selectedOptions[0]?.textContent || wrapper.dataset.label;
+      button.querySelector('span').textContent = select.id === 'chat-session-status'
+        ? ({waiting:'Waiting', done:'Done'}[select.value] || label) : label;
+      button.disabled = select.disabled;
+      button.dataset.state = select.id === 'chat-session-status' ? select.value : '';
+      button.classList.toggle('mchip-risk', select.classList.contains('mchip-risk'));
+      button.classList.toggle('errflash', select.classList.contains('errflash'));
+      button.setAttribute('aria-label', wrapper.dataset.label + ': ' + label);
+      button.title = wrapper.dataset.label + ': ' + label + (select.title ? '\n' + select.title : '')
+        + (select.id === 'model-select' ? '\nShared setting for the next reply in any tab.' : '');
+      if (chatControlSource === select && (select.disabled || wrapper.hidden || select.hidden)) closeChatControl();
+    });
+  }
+  function closeChatControl() { byId('chat-control-dialog').close(); }
+  function openChatControl(id) {
+    syncChatControls();
+    const select = byId(id), wrapper = select.closest('[data-control]');
+    if (select.disabled || select.hidden || wrapper.hidden) return;
+    const dialog = byId('chat-control-dialog'), button = wrapper.querySelector('button');
+    chatControlSource = select;
+    byId('chat-control-title').textContent = wrapper.dataset.label;
+    byId('chat-control-help').textContent = id === 'model-select'
+      ? 'Shared setting for the next reply in any tab. The current reply keeps its model.'
+      : id === 'effort-select' ? 'Saved for this model. Higher effort may take longer.'
+      : 'Open: work remains. Waiting: needs your input or activation. Done: no further work in this session.';
+    const options = byId('chat-control-options'); options.replaceChildren();
+    [...select.options].forEach(option => {
+      if (option.hidden) return;
+      const choice = document.createElement('button');
+      choice.type = 'button'; choice.className = 'chat-control-option'; choice.setAttribute('role', 'menuitemradio');
+      choice.setAttribute('aria-checked', String(option.selected)); choice.disabled = option.disabled;
+      choice.textContent = option.textContent;
+      if (id === 'chat-session-status') choice.dataset.state = option.value;
+      choice.onclick = () => {
+        if (chatControlSource !== select || select.disabled || wrapper.hidden || select.hidden) return;
+        const changed = select.value !== option.value;
+        closeChatControl();
+        if (changed) { select.value = option.value; select.dispatchEvent(new Event('change', {bubbles:true})); }
+        syncChatControls();
+      };
+      choice.onkeydown = event => {
+        const choices = [...options.querySelectorAll('button:not(:disabled)')], index = choices.indexOf(choice);
+        let next;
+        if (event.key === 'ArrowDown' || event.key === 'ArrowRight') next = (index + 1) % choices.length;
+        if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') next = (index + choices.length - 1) % choices.length;
+        if (event.key === 'Home') next = 0;
+        if (event.key === 'End') next = choices.length - 1;
+        if (next !== undefined) { event.preventDefault(); choices[next].focus(); }
+      };
+      options.appendChild(choice);
+    });
+    const rect = button.getBoundingClientRect();
+    dialog.style.left = Math.max(8, Math.min(rect.left, innerWidth - 368)) + 'px';
+    dialog.style.top = Math.max(8, Math.min(rect.bottom + 6, innerHeight - Math.min(innerHeight * .65, 560) - 8)) + 'px';
+    button.setAttribute('aria-expanded', 'true'); dialog.showModal();
+    (options.querySelector('[aria-checked="true"]:not(:disabled)') || options.querySelector('button:not(:disabled)'))?.focus();
+  }
+  byId('chat-control-dialog').addEventListener('close', () => {
+    const select = chatControlSource; chatControlSource = null;
+    const button = select?.closest('[data-control]').querySelector('button');
+    if (button) { button.setAttribute('aria-expanded', 'false'); if (!button.disabled && button.getClientRects().length) button.focus(); }
+  });
+  byId('chat-control-dialog').addEventListener('click', event => {
+    const dialog = event.currentTarget, rect = dialog.getBoundingClientRect();
+    if (event.target === dialog && (event.clientX < rect.left || event.clientX > rect.right
+      || event.clientY < rect.top || event.clientY > rect.bottom)) closeChatControl();
+  });
+  document.querySelectorAll('#model-row [data-control] select').forEach(select => {
+    select.classList.add('chat-control-source'); select.tabIndex = -1; select.setAttribute('aria-hidden', 'true');
+    select.addEventListener('change', syncChatControls);
+    new MutationObserver(syncChatControls).observe(select, {attributes:true, childList:true, subtree:true, characterData:true});
+  });
+  syncChatControls();
   const UI_ICONS = __CHAT_ICONS__;
   const HISTORY_TEXT = __HISTORY_LABELS__;
   const SKILL_CATALOG = __SKILL_CATALOG__;
@@ -753,19 +1029,20 @@ JS = r'''
   // 保存/切替の瞬間だけ、鏡変数(chatSession/chatLabel)とTABS[]配列を同期する。
   function pushMirrorToTab() {
     const t = activeTabObj();
-    if (t) { t.session = chatSession; t.label = chatLabel; }
+    if (t) { t.session = chatSession; t.label = chatLabel; t.draft = byId('chat-input').value; }
   }
   function pullMirrorFromTab() {
     const t = activeTabObj();
     chatSession = t ? t.session : '';
     chatLabel = t ? t.label : '';
+    byId('chat-input').value = t ? t.draft : '';
   }
 
   function makeTabObj(label) {
     tabSeq += 1;
     return { id: 't' + Date.now() + '_' + tabSeq, session: '', label: label || '対話',
              model: '', voiceBusy: false, pollTimer: null, jobId: '', unread: false, watchLastJobId: '',
-             queue: [], starting: false };
+             queue: [], starting: false, draft: '' };
   }
 
   function makePane(tabId) {
@@ -814,6 +1091,7 @@ JS = r'''
   }
 
   function switchTab(tabId, opts) {
+    closeChatControl();
     opts = opts || {};
     const idx = TABS.findIndex(t => t.id === tabId);
     if (idx < 0) return;
@@ -853,6 +1131,7 @@ JS = r'''
     if (TABS.length === 1) { closeResult(); return; }
     const t = TABS[idx];
     if ((tabBusy(t) || t.voiceBusy) && !window.confirm('Close "' + (t.label || 'Chat') + '"?\nThis removes the tab from the panel. Running work will continue.')) return;
+    pushMirrorToTab();
     if (t.pollTimer) clearInterval(t.pollTimer);  // 裏で走っていたポーリングだけ止める（サーバー側ジョブは止めない）
     stopRecovery(t);
     const pane = paneOf(tabId);
@@ -861,6 +1140,7 @@ JS = r'''
     if (activeTab >= idx) activeTab = Math.max(0, activeTab - 1);
     const newActive = TABS[activeTab];
     switchTab(newActive.id, { skipPush: true, force: true });  // force理由はnewTab()のコメント参照
+    rememberChatDraft();
   }
 
   function renderTabBar() {
@@ -930,6 +1210,7 @@ JS = r'''
     const status = byId('chat-model-status');
     status.hidden = workTabActive;
     status.textContent = tabModelStatus(activeTabObj());
+    refreshChatSessionStatus(activeTabObj());
   }
 
   function escapeHtml(s) {
@@ -1154,6 +1435,7 @@ JS = r'''
     const previous = /^\/([a-z0-9-]+)(?:\s+|$)/.exec(inp.value);
     const details = previous && names.has(previous[1]) ? inp.value.slice(previous[0].length) : inp.value;
     inp.value = '/' + name + ' ' + details;
+    rememberChatDraft();
     inp.focus();
     inp.setSelectionRange(inp.value.length, inp.value.length);
   }
@@ -1187,8 +1469,37 @@ JS = r'''
     s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
     if (workLinks) s = s.replace(/\[([^\]]+)\]\((\/files\?p=[^\s)"']+)\)/g,
       '<a href="$2" target="_blank" rel="noopener">$1</a>');
-    return s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/`([^`]+)`/g, '<code>$1</code>');
+    s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/`([^`]+)`/g, '<code>$1</code>');
+    // ==重要箇所== → 蛍光マーカー（2026-10-10）。`a == b` 等を誤爆しないよう両端は非空白必須、code内は除外
+    return s.split(/(<code>[\s\S]*?<\/code>)/).map((seg, k) => k % 2 ? seg
+      : seg.replace(/==(?=[^=\s])(.+?[^=\s])==/g, '<mark class="cm-mark">$1</mark>')).join('');
   }
+
+  // 返答の「固まり」を色で見分けるための見出し辞書（2026-10-10 ユーザー要望：どこが重要かパッと見で
+  // 分からない）。見出し行・太字だけの行・「**Done:** 本文」の形を見つけたら、次の見出し/区切り線まで
+  // を意味色つきのブロックで囲む。色は意味トークン（UIデザイン原則：装飾の2本目アクセントは足さない）。
+  const CM_SECTIONS = [
+    { kind: 'decide', icon: 'comment', re: /^(decisions?( needed)?|needs? (your )?(decision|input)|your call|要判断|判断が必要|確認してほしいこと|決めてほしいこと)$/ },
+    { kind: 'issue', icon: 'warn', re: /^(issues?|problems?|risks?|blockers?|caveats?|課題|問題|注意|リスク)$/ },
+    { kind: 'ok', icon: 'check', re: /^(done|completed?|finished|result|完了|やったこと|結果)$/ },
+    { kind: 'next', icon: 'clock', re: /^(next( steps?)?|todo|次(の一手|にやること)?)$/ },
+  ];
+  function cmSection(l) {  // l はエスケープ済みの1行。該当すれば {kind, icon, label, rest}
+    let m = l.match(/^\s*#{1,6}\s+(.+?)\s*$/) || l.match(/^\s*\*\*([^*]+?)\*\*\s*[:：]?\s*$/);
+    let rest = '';
+    if (!m) {
+      m = l.match(/^\s*\*\*([^*]+?)\s*[:：]?\s*\*\*\s*[:：]?\s+(\S.*)$/);
+      if (!m) return null;
+      rest = m[2];
+    }
+    const label = m[1].replace(/\*\*/g, '').replace(/[:：]\s*$/, '').trim();
+    const key = label.replace(/^[^\p{L}\p{N}]+/u, '').trim().toLowerCase();
+    const hit = CM_SECTIONS.find(s => s.re.test(key));
+    return hit ? { kind: hit.kind, icon: hit.icon, label, rest } : null;
+  }
+  const CM_CALLOUTS = { note: 'info', info: 'info', tip: 'ok', success: 'ok', check: 'ok', done: 'ok',
+    warning: 'issue', caution: 'issue', danger: 'issue', important: 'decide', question: 'decide' };
+  const CM_KIND_ICON = { info: 'comment', ok: 'check', issue: 'warn', decide: 'comment', next: 'clock' };
 
   // 結果テキストの軽量 markdown → HTML（エスケープしてから装飾）。
   // GFMテーブル・箇条書き・番号付きリスト・見出し・区切り線・画像・リンクに対応（2026-08-11。
@@ -1197,10 +1508,18 @@ JS = r'''
   // 重いため。他言語の```はシンタックスハイライト無しの<pre><code>のみ）。
   // 生成途中（ストリーミング）の不完全なテキストが来ても壊れないよう、行単位で判定する。
   function mdlite(t, workLinks = false) {
-    const inline = s => mdInline(s, workLinks);
     t = t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const lines = t.split('\n'), out = [];
-    const UL = /^\s*[-*]\s+/, OL = /^\s*\d+\.\s+/, H = /^\s*#{1,6}\s+/, FENCE = /^\s*```/;
+    return mdBlocks(t.split('\n'), workLinks);
+  }
+
+  // エスケープ済みの行配列 → HTML。引用（> / > [!type] コールアウト）の中身は再帰で同じ処理を通す。
+  function mdBlocks(lines, workLinks) {
+    const inline = s => mdInline(s, workLinks);
+    const out = [];
+    const UL = /^\s*[-*]\s+/, OL = /^\s*\d+\.\s+/, H = /^\s*#{1,6}\s+/, FENCE = /^\s*```/, BQ = /^\s*&gt;\s?/;
+    let secOpen = false;
+    const closeSec = () => { if (secOpen) { out.push('</section>'); secOpen = false; } };
+    const icon = k => UI_ICONS[k] || '';
     const isSep = s => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(s);
     const cells = s => s.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map(c => inline(c.trim()));
     const isTableHead = (i) => lines[i].indexOf('|') >= 0 && i + 1 < lines.length && isSep(lines[i + 1]);
@@ -1217,6 +1536,29 @@ JS = r'''
         out.push(lang === 'mermaid' && closed
           ? '<pre class="mermaid">' + buf.join('\n') + '</pre>'
           : '<pre class="cm-code"><code>' + buf.join('\n') + '</code></pre>');
+        continue;
+      }
+      const sec = cmSection(l);
+      if (sec) {  // Done / Issues / Decision needed 等の固まり → 意味色ブロックを開く
+        closeSec();
+        out.push('<section class="cm-sec cm-sec-' + sec.kind + '"><div class="cm-sec-label">'
+          + icon(sec.icon) + '<span>' + inline(sec.label) + '</span></div>');
+        secOpen = true;
+        if (sec.rest) lines[i] = sec.rest; else i++;
+        continue;
+      }
+      if (BQ.test(l)) {  // 引用・コールアウト（> [!warning] 見出し）
+        const buf = [];
+        while (i < lines.length && BQ.test(lines[i])) { buf.push(lines[i].replace(BQ, '')); i++; }
+        const cm = (buf[0] || '').match(/^\s*\[!(\w+)\][+-]?\s*(.*)$/);
+        if (cm) {  // コールアウトは独立した強調なので、直前の固まりの中に入れ込まない
+          closeSec();
+          const kind = CM_CALLOUTS[cm[1].toLowerCase()] || 'info';
+          const title = cm[2].trim();
+          out.push('<div class="cm-callout cm-sec-' + kind + '">'
+            + (title ? '<div class="cm-sec-label">' + icon(CM_KIND_ICON[kind]) + '<span>' + inline(title) + '</span></div>' : '')
+            + mdBlocks(buf.slice(1), workLinks) + '</div>');
+        } else out.push('<blockquote class="cm-quote">' + mdBlocks(buf, workLinks) + '</blockquote>');
         continue;
       }
       if (isTableHead(i)) {  // GFMテーブル
@@ -1236,14 +1578,16 @@ JS = r'''
         out.push('<' + tag + ' class="cm-list">' + items.map(x => '<li>' + x + '</li>').join('') + '</' + tag + '>');
         continue;
       }
-      if (H.test(l)) { out.push('<div class="cm-h">' + inline(l.replace(H, '')) + '</div>'); i++; continue; }
-      if (/^\s*(-{3,}|\*{3,})\s*$/.test(l)) { out.push('<hr class="cm-hr">'); i++; continue; }
+      if (H.test(l)) { closeSec(); out.push('<div class="cm-h">' + inline(l.replace(H, '')) + '</div>'); i++; continue; }
+      if (/^\s*(-{3,}|\*{3,})\s*$/.test(l)) { closeSec(); out.push('<hr class="cm-hr">'); i++; continue; }
       if (!l.trim()) { i++; continue; }
       const para = [];  // 連続する通常行は1段落にまとめる
       while (i < lines.length && lines[i].trim() && !UL.test(lines[i]) && !OL.test(lines[i])
-             && !H.test(lines[i]) && !isTableHead(i) && !FENCE.test(lines[i])) { para.push(inline(lines[i])); i++; }
+             && !H.test(lines[i]) && !isTableHead(i) && !FENCE.test(lines[i]) && !BQ.test(lines[i])
+             && !(para.length && cmSection(lines[i]))) { para.push(inline(lines[i])); i++; }
       out.push('<p class="cm-p">' + para.join('<br>') + '</p>');
     }
+    closeSec();
     return out.join('');
   }
 
@@ -1397,6 +1741,7 @@ JS = r'''
   }
 
   function minimizeResult() {
+    closeChatControl();
     closeChatPickers();
     minimized = true;
     byId('result').classList.add('mini');
@@ -1419,6 +1764,7 @@ JS = r'''
 
   // ドック全体を閉じる（全タブ）。個別タブだけ畳みたい時は closeTab() を使う。
   function closeResult() {
+    closeChatControl();
     const needsConfirmation = TABS.length > 1 || TABS.some(t => tabBusy(t) || t.voiceBusy);
     if (needsConfirmation && !window.confirm('Close the chat panel and all its tabs?\nUse Minimize to keep your conversations available. Running work will continue.')) return;
     closeChatPickers();
@@ -1436,6 +1782,8 @@ JS = r'''
     minimized = false;
     miniUnread = false;
     chatSession = '';
+    byId('chat-input').value = '';
+    rememberChatDraft();
     clearAttach();
     updateFabVisibility();
   }
@@ -1448,7 +1796,7 @@ JS = r'''
       content.querySelectorAll('.msg-actions, .msg-speak, .chat-acct, .stop-note, .choice-btns, .chat-cursor')
         .forEach(node => node.remove());
       content.querySelectorAll('br').forEach(node => node.replaceWith('\n'));
-      content.querySelectorAll('p, .cm-h, li, pre, tr').forEach(node => node.append('\n'));
+      content.querySelectorAll('p, .cm-h, .cm-sec-label, li, pre, tr').forEach(node => node.append('\n'));
       el.dataset.copyText = el.dataset.ttsText || content.textContent.trim();
     }
     let actions = el.querySelector('.msg-actions');
@@ -1546,6 +1894,67 @@ JS = r'''
 
   let chatHistoryItems = [];
   let chatHistorySequence = 0;
+  let chatHistoryLoading = false;
+  let chatHistoryFailed = false;
+
+  function renderChatSessionStatus(tab) {
+    if (activeTabObj() !== tab) return;
+    const row = byId('chat-session-state'), select = byId('chat-session-status');
+    row.hidden = workTabActive || !tab.session || (!tab.workState && !tab.workError);
+    if (row.hidden) { byId('chat-session-state-message').textContent = ''; syncChatControls(); return; }
+    select.hidden = !tab.workState;
+    select.replaceChildren();
+    Object.entries(tab.workStates || {}).forEach(([value, label]) => {
+      const option = document.createElement('option'); option.value = value; option.textContent = label;
+      select.appendChild(option);
+    });
+    select.value = tab.workState;
+    select.disabled = !!(tab.jobId || tab.pollTimer || tab.voiceBusy || tab.recovery || tab.workSaving || tab.workRunning);
+    byId('chat-session-state-message').textContent = tab.workError || '';
+    syncChatControls();
+  }
+
+  async function refreshChatSessionStatus(tab, force) {
+    if (!tab || !tab.session) {
+      byId('chat-session-state').hidden = true; byId('chat-session-state-message').textContent = '';
+      syncChatControls(); return;
+    }
+    renderChatSessionStatus(tab);
+    if (tab.workLoading || tab.workSaving || (!force && (tab.workError || Date.now() - (tab.workFetched || 0) < 4000))) return;
+    const session = tab.session;
+    tab.workLoading = true;
+    try {
+      const response = await fetch('/sessions/data?filter=all&session=' + encodeURIComponent(session), {cache:'no-store'});
+      if (!response.ok) throw new Error('Work status could not be loaded.');
+      const data = await response.json();
+      if (tabById(tab.id) !== tab || tab.session !== session) return;
+      const item = (data.items || []).find(item => item.session === session);
+      tab.workState = item?.work_status || ''; tab.workRunning = !!item?.running;
+      tab.workStates = data.states || {}; tab.workFetched = Date.now(); tab.workError = '';
+      renderChatSessionStatus(tab);
+    } catch (error) { tab.workError = error.message + ' Use Refresh to retry.'; renderChatSessionStatus(tab); }
+    finally { tab.workLoading = false; }
+  }
+
+  async function saveChatSessionStatus() {
+    const tab = activeTabObj();
+    if (!tab || !tab.session || tab.jobId || tab.pollTimer || tab.voiceBusy || tab.recovery || tab.workSaving || tab.workRunning) return;
+    const state = byId('chat-session-status').value, session = tab.session;
+    tab.workSaving = true; renderChatSessionStatus(tab);
+    try {
+      const response = await fetch('/sessions/status', {method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({key:session, work_status:state})});
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || 'Work status was not saved.');
+      if (tab.session === session) { tab.workState = data.work_status; tab.workError = ''; tab.workFetched = 0; }
+    } catch (error) { tab.workError = error.message + ' Previous status retained.'; }
+    finally { tab.workSaving = false; renderChatSessionStatus(tab); }
+  }
+
+  setInterval(() => {
+    if (!document.hidden && byId('result').getClientRects().length && document.activeElement !== byId('chat-session-status'))
+      refreshChatSessionStatus(activeTabObj());
+  }, 4000);
 
   function closeChatHistory() {
     byId('chat-history').hidden = true;
@@ -1562,25 +1971,43 @@ JS = r'''
     byId('chat-history-search').value = '';
     byId('chat-history-search').focus();
     chatHistoryItems = [];
+    chatHistoryFailed = false;
     byId('chat-history-results').replaceChildren();
     byId('chat-history-message').textContent = 'Loading sessions…';
+    loadChatHistory();
+  }
+
+  async function loadChatHistory(refresh) {
+    if (refresh && (chatHistoryLoading || chatHistoryFailed)) return;
+    chatHistoryLoading = true;
     const sequence = ++chatHistorySequence;
     try {
       const response = await fetch('/sessions/data?filter=all');
       if (!response.ok) throw new Error('Sessions could not be loaded. Reopen History to retry.');
       const data = await response.json();
       if (sequence !== chatHistorySequence) return;
-      chatHistoryItems = (data.items || []).filter(item => item.session);
+      const items = (data.items || []).filter(item => item.session);
+      if (refresh && JSON.stringify(items) === JSON.stringify(chatHistoryItems)) return;
+      chatHistoryItems = items;
       renderChatHistory();
     } catch (_) {
-      if (sequence === chatHistorySequence)
+      if (sequence === chatHistorySequence) {
+        chatHistoryFailed = true;
         byId('chat-history-message').textContent = 'Sessions could not be loaded. Reopen History to retry.';
+      }
+    } finally {
+      if (sequence === chatHistorySequence) chatHistoryLoading = false;
     }
   }
 
+  setInterval(() => {
+    if (!document.hidden && !byId('chat-history').hidden && !document.activeElement.closest('#chat-history-results'))
+      loadChatHistory(true);
+  }, 4000);
+
   function renderChatHistory() {
     const query = byId('chat-history-search').value.trim().toLocaleLowerCase();
-    const items = chatHistoryItems.filter(item => !query || [item.label, item.updated, item.model]
+    const items = chatHistoryItems.filter(item => !query || [item.label, item.updated, item.model, item.summary, item.work_status_label]
       .join(' ').toLocaleLowerCase().includes(query));
     const results = byId('chat-history-results');
     results.replaceChildren();
@@ -1597,8 +2024,11 @@ JS = r'''
       title.textContent = item.label;
       const detail = document.createElement('small');
       detail.textContent = [item.updated, MODEL_LABELS[item.model] || item.model,
-        item.running ? 'Running' : ''].filter(Boolean).join(' · ');
+        item.running ? 'Running' : item.work_status_label].filter(Boolean).join(' · ');
       button.append(title, detail);
+      const summary = document.createElement('span'); summary.className = 'chat-history-summary';
+      summary.textContent = item.summary || (item.review_excluded ? 'Preview unavailable for this session.' : 'No saved summary.');
+      summary.title = summary.textContent; button.appendChild(summary);
       results.appendChild(button);
     });
     byId('chat-history-message').textContent = items.length
@@ -1733,6 +2163,7 @@ JS = r'''
       eff.hidden = auto;
       if (!auto && model in MODEL_EFFORT) eff.value = MODEL_EFFORT[model];
     }
+    syncChatControls();
   }
 
   function reportAutoModel(model) {
@@ -1780,7 +2211,7 @@ JS = r'''
     MODEL_EFFORT[m] = level;
     fetch('/set-effort?m=' + encodeURIComponent(m) + '&level=' + encodeURIComponent(level))
       .then(r => { if (!r.ok) throw 0; })
-      .catch(() => { MODEL_EFFORT[m] = prev; byId('effort-select').value = prev; });
+      .catch(() => { MODEL_EFFORT[m] = prev; byId('effort-select').value = prev; syncChatControls(); });
   }
 
   // ── モデル選択ポップアップ（2026-08-16）: [data-exec-skill] はクリック即実行なので、
@@ -1964,6 +2395,7 @@ JS = r'''
     if (activeTabObj() === tab) {
       const inp = byId('chat-input');
       inp.value = [inp.value.trim()].concat(items.map(q => q.text)).filter(Boolean).join('\n');
+      rememberChatDraft();
       updateSendBtn();
     }
   }
@@ -1978,6 +2410,7 @@ JS = r'''
     if (el) el.remove();
     const inp = byId('chat-input');
     if (activeTabObj() === tab && !inp.value.trim()) { inp.value = item.text; inp.focus(); }  // 取り消し＝手直しできるよう戻す
+    rememberChatDraft();
     updateSendBtn();
   }
 
@@ -2016,7 +2449,7 @@ JS = r'''
     closeVaultPicker();
     if (voiceChat.active) {
       const input = byId('chat-input');
-      voiceChat.sendTyped(input.value); input.value = ''; return false;
+      voiceChat.sendTyped(input.value); input.value = ''; rememberChatDraft(); return false;
     }
     unlockAudio();  // 送信タップ/Enter＝ジェスチャ。完了時の自動読み上げを通すためここでアンロック
     if (window.SFX) SFX.warm();  // 完了音(chat_done)は非同期ポーリング内で鳴るのでここで起こしておく
@@ -2027,6 +2460,7 @@ JS = r'''
     const att = pendingAttachment;
     if (!text && !att) return false;
     inp.value = '';
+    rememberChatDraft();
     // 添付があれば text 先頭にパスを差し込む（claude -p が Read で読む）。ユーザー本文は温存
     const sendText = att ? ('[添付ファイル: ' + att.path + ']\n' + text) : text;
     pendingAttachment = null; renderAttach();
@@ -2075,6 +2509,8 @@ JS = r'''
     return t.replace(/```[\s\S]*?```/g, ' ')
             .replace(/`([^`]*)`/g, '$1')
             .replace(/\*\*?([^*]+)\*\*?/g, '$1')
+            .replace(/==([^=]+)==/g, '$1')
+            .replace(/\[![a-z]+\][+-]?/gi, '')
             .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
             .replace(/^#+\s*/gm, '')
             .replace(/^[-*>]\s+/gm, '')
@@ -2353,7 +2789,7 @@ JS = r'''
   }
 
   // All history recovery reads stay bound to their original conversation tab.
-  function historyStatus(tab, key, retry) {
+  function historyStatus(tab, key) {
     const pane = tab && paneOf(tab.id);
     if (!pane || tabById(tab.id) !== tab) return;
     let status = pane.querySelector('.history-status');
@@ -2364,18 +2800,6 @@ JS = r'''
       pane.appendChild(status);
     }
     status.replaceChildren(document.createTextNode(HISTORY_TEXT[key]));
-    if (retry) {
-      const actions = document.createElement('div');
-      actions.className = 'choice-btns';
-      for (const [label, action] of [[HISTORY_TEXT.refresh, () => refetchDock(tab)],
-                                     [HISTORY_TEXT.history, toggleChatHistory]]) {
-        const button = document.createElement('button');
-        button.type = 'button'; button.className = 'choice-btn';
-        button.textContent = label; button.onclick = action;
-        actions.appendChild(button);
-      }
-      status.appendChild(actions);
-    }
     if (activeTabObj() === tab) scrollChatToLatest();
   }
 
@@ -2396,7 +2820,7 @@ JS = r'''
   function reloadTranscriptInPlace(tab, options) {
     tab = tab || activeTabObj(); options = options || {};
     if (!tab || tabById(tab.id) !== tab) return Promise.resolve(false);
-    if (!tab.session) { historyStatus(tab, 'noSession', true); return Promise.resolve(false); }
+    if (!tab.session) { historyStatus(tab, 'noSession'); return Promise.resolve(false); }
     if (tab.historyLoading) return tab.historyLoad;
     const session = tab.session, jobId = tab.jobId;
     tab.historyLoading = true; tab.historyError = false;
@@ -2411,7 +2835,7 @@ JS = r'''
         if (!Array.isArray(list) || list.some(m => !m || !['user', 'assistant'].includes(m.role) ||
                                                   typeof m.text !== 'string')) throw new Error('Invalid history');
         if (!list.length) {
-          if (!options.recovering) historyStatus(tab, 'empty', true);
+          if (!options.recovering) historyStatus(tab, 'empty');
           return false;
         }
         if (options.recovering) {
@@ -2434,7 +2858,7 @@ JS = r'''
       .catch(() => {
         if (tabById(tab.id) === tab) {
           tab.historyError = true; tab.historyPaused = true;
-          if (!options.recovering) historyStatus(tab, 'failed', true);
+          if (!options.recovering) historyStatus(tab, 'failed');
         }
         return false;
       })
@@ -2459,7 +2883,7 @@ JS = r'''
     historyStatus(tab, 'waiting'); renderTabBar();
     function finish(key) {
       stopRecovery(tab); tab.historyPaused = true;
-      historyStatus(tab, key, true);
+      historyStatus(tab, key);
       returnQueue(tab);
       if (activeTabObj() === tab) setBusy(false);
       renderTabBar(); saveDockState();
@@ -2487,6 +2911,7 @@ JS = r'''
   function refetchDock(tab, automatic) {
     tab = tab || activeTabObj();
     if (!tab || tabById(tab.id) !== tab || tab.refreshing || tab.starting || tab.voiceBusy) return;
+    if (!automatic) refreshChatSessionStatus(tab, true);
     if (automatic && (tab.historyPaused || Date.now() - (tab.lastHistoryCheck || 0) < 5000)) return;
     const btn = byId('refetch-btn');
     if (!automatic && btn) btn.disabled = true;
@@ -2516,7 +2941,7 @@ JS = r'''
         }
         return reloadTranscriptInPlace(tab, {quiet: !!automatic});
       })
-      .catch(() => { tab.historyPaused = true; historyStatus(tab, 'failed', true); return false; })
+      .catch(() => { tab.historyPaused = true; historyStatus(tab, 'failed'); return false; })
       .finally(() => { tab.refreshing = null; if (!automatic && btn) btn.disabled = false; });
     return tab.refreshing;
   }
@@ -2793,14 +3218,41 @@ JS = r'''
   // ポーリングを再開するので、応答待ちのまま別ページへ移っても結果を取りこぼさない。
   // sessionStorage を使うのはタブ単位で完結させるため（別タブに会話が漏れない・タブを
   // 閉じれば消える）。
+  // 時間切れ（旧 DOCK_TTL_MS=6h）は 2026-10-10 撤廃：閉じない限り保持する（ユーザーの要望）。Memory Saver 等で
+  // 放置タブが破棄→再読込されると、最後の保存から6h超で会話が丸ごと消えていた。
   const DOCK_KEY = 'shukiDockState';
-  const DOCK_TTL_MS = 6 * 60 * 60 * 1000;   // 6時間以上前の会話は復元しない（放置後の突然の復活を防ぐ）
+  const DOCK_DRAFT_KEY = 'shukiDockDrafts';
   const DOCK_LOG_MAX = 300000;              // 保存する会話ログの上限（sessionStorage枠を食い潰さない）
+  // 復元が走る前（DOMContentLoaded 前）にリロード・遷移されると、ドックは未描画＝hidden のまま
+  // pagehide が来る。それを「閉じた」と誤認して保存済みの会話を消していた（2026-10-10、
+  // 遅いページ・サーバー再起動中に「たまに消える」の正体）。消すのは復元後に hidden の時だけ。
+  let dockRestoreDone = false;
+
+  function rememberChatDraft() {
+    const tab = activeTabObj();
+    if (tab) tab.draft = byId('chat-input').value;
+    try {
+      if (!TABS.length) { sessionStorage.removeItem(DOCK_DRAFT_KEY); return; }
+      // Save only text here; serializing transcripts on every keystroke is unnecessary.
+      sessionStorage.setItem(DOCK_DRAFT_KEY, JSON.stringify(Object.fromEntries(TABS.map(t => [t.id, t.draft]))));
+    } catch (_) {}
+  }
+
+  function restoreChatDrafts() {
+    let drafts;
+    try { drafts = JSON.parse(sessionStorage.getItem(DOCK_DRAFT_KEY) || 'null'); } catch (_) {}
+    TABS.forEach(tab => {
+      if (typeof drafts?.[tab.id] === 'string') tab.draft = drafts[tab.id];
+    });
+    byId('chat-input').value = activeTabObj()?.draft || '';
+    updateSendBtn();
+  }
 
   function saveDockState() {
     try {
-      if (byId('result').hidden) { sessionStorage.removeItem(DOCK_KEY); return; }
+      if (byId('result').hidden) { if (dockRestoreDone) sessionStorage.removeItem(DOCK_KEY); return; }
       pushMirrorToTab();
+      rememberChatDraft();
       const tabs = TABS.map(t => {
         const pane = paneOf(t.id);
         let log = pane ? pane.innerHTML : '';
@@ -2808,13 +3260,13 @@ JS = r'''
           pane.removeChild(pane.firstElementChild);  // 古い発言から捨てる
           log = pane.innerHTML;
         }
-        return { id: t.id, session: t.session, label: t.label, model: t.model, log: log,
+        return { id: t.id, session: t.session, label: t.label, model: t.model, log: log, draft: t.draft,
                  jobId: t.pollTimer ? t.jobId : '', unread: t.unread,  // 応答待ちのまま離脱したか
                  watchLastJobId: t.watchLastJobId, queue: t.queue || [],
                  recoveryText: t.recoveryText || '', historyPaused: !!t.historyPaused,
                  sessionTabsReceipt: t.sessionTabsReceipt };  // Do not reopen handled actions after reload.
       });
-      sessionStorage.setItem(DOCK_KEY, JSON.stringify({
+      const state = tabs => JSON.stringify({
         ts: Date.now(),
         tabs: tabs,
         activeTab: activeTab,
@@ -2823,15 +3275,25 @@ JS = r'''
         unread: miniUnread,
         err: byId('result').classList.contains('err'),
         inputHidden: byId('chat-input-row').hidden,
-      }));
+      });
+      try { sessionStorage.setItem(DOCK_KEY, state(tabs)); }
+      catch (e) {
+        // 容量超過なら、セッションIDのあるタブは見た目のログを捨てて保存する（復元時に
+        // reloadTranscriptInPlace がサーバーの履歴から描き直す）。黙って古い状態が残るよりよい。
+        sessionStorage.setItem(DOCK_KEY, state(tabs.map(t => t.session && !t.jobId
+          ? Object.assign({}, t, {log: '', historyPaused: false}) : t)));
+      }
     } catch (e) {}  // 保存できなくても会話は続けられる（容量超過・プライベートモード等）
   }
 
   function restoreDockState() {
+    try { restoreDockStateInner(); } finally { dockRestoreDone = true; }
+  }
+
+  function restoreDockStateInner() {
     let s = null;
     try { s = JSON.parse(sessionStorage.getItem(DOCK_KEY) || 'null'); } catch (e) { return; }
     if (!s) return;
-    if (Date.now() - (s.ts || 0) > DOCK_TTL_MS) { sessionStorage.removeItem(DOCK_KEY); return; }
     byId('result').hidden = false;
     byId('result').classList.toggle('err', !!s.err);
     const saved = (s.tabs && s.tabs.length) ? s.tabs : [{
@@ -2842,6 +3304,7 @@ JS = r'''
       if (st.id) t.id = st.id;
       t.session = st.session || '';
       t.model = st.model || '';
+      t.draft = typeof st.draft === 'string' ? st.draft : '';
       t.unread = !!st.unread;
       // 旧・単一会話スキーマ（〜2026-09-25）は tab.watchLastJobId を持たないので、
       // 代わりにトップレベルの旧 s.watchLastJobId（後方互換のためだけ残る）を1本目に充てる。
@@ -2856,6 +3319,7 @@ JS = r'''
     TABS.forEach((t, i) => {
       const pane = makePane(t.id);
       pane.innerHTML = saved[i].log || '';
+      pane.querySelectorAll('.history-status .choice-btns').forEach(actions => actions.remove());
       pane.querySelectorAll('.chat-msg').forEach(el => {
         const actions = attachCopy(el);
         const button = actions.querySelector('.msg-copy');
@@ -2907,6 +3371,11 @@ JS = r'''
   // pagehide はモバイルSafari等で beforeunload が発火しないケースを拾う。visibilitychange も
   // 併用するのは、アプリ切替やタブ非表示のまま端末がページを破棄する経路への保険。
   window.addEventListener('pagehide', saveDockState);
+  window.addEventListener('pageshow', event => {
+    // History navigation restores native form values after DOMContentLoaded.
+    // The conversation draft is authoritative, including an intentionally empty one.
+    restoreChatDrafts();
+  });
   document.addEventListener('visibilitychange', () => { if (document.hidden) saveDockState(); });
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', restoreDockState);
   else restoreDockState();
@@ -2972,6 +3441,182 @@ JS = r'''
       sel.title = selReason ? (selReason + ' ／ ' + sel.dataset.baseTitle) : sel.dataset.baseTitle;
     }
   }
+
+  // 🧭 プロンプトレール（2026-10-11）: 表示中タブの自分の発言（.chat-msg.user）を横棒に写す。
+  // 発言の追加経路（送信・キュー・履歴復元・タブ切替）が多いため、各経路に呼び出しを足さず
+  // #chat-log の変化を見張って作り直す。今いる発言は #chat-log のスクロール位置から決める。
+  const promptRail = (() => {
+    const rail = byId('prompt-rail'), tip = byId('prompt-rail-tip'), log = byId('chat-log');
+    const view = byId('conversation-view');
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    let prompts = [], current = -1, scrubbing = false, holdSyncUntil = 0, frame = 0, tipTimer = 0, lastWheel = 0;
+    let scrollTimer = 0, railPane = null, scrollIntentUntil = 0;
+
+    function showWhileScrolling() {
+      if (rail.hidden) return;
+      clearTimeout(scrollTimer);
+      rail.classList.add('scrolling');
+      scrollTimer = setTimeout(() => {
+        if (!scrubbing) { rail.classList.remove('scrolling'); hideTip(0); }
+      }, 1400);
+    }
+
+    function promptText(el) {
+      let text = '';
+      el.childNodes.forEach(n => {
+        if (n.nodeType === 1 && n.matches('.msg-actions, .msg-att, .queued-note')) return;
+        text += n.textContent;
+      });
+      return text.replace(/\s+/g, ' ').trim();
+    }
+    function schedule() { if (!frame) frame = requestAnimationFrame(rebuild); }
+    function rebuild() {
+      frame = 0;
+      const pane = activePane();
+      if (pane !== railPane) {
+        railPane = pane;
+        scrollIntentUntil = 0;
+        clearTimeout(scrollTimer);
+        rail.classList.remove('scrolling');
+        hideTip(0);
+      }
+      const list = (pane !== log && !workTabActive && log.getClientRects().length)
+        ? [...pane.querySelectorAll('.chat-msg.user')] : [];
+      const show = list.length >= 2;
+      rail.hidden = !show;
+      if (!show) { prompts = []; current = -1; rail.textContent = ''; rail.classList.remove('scrolling'); hideTip(0); return; }
+      if (list.length !== prompts.length || list.some((el, i) => el !== prompts[i])) {
+        prompts = list;
+        current = -1;
+        rail.textContent = '';
+        list.forEach((el, i) => {
+          const bar = document.createElement('button');
+          bar.type = 'button';
+          bar.className = 'pr-bar';
+          bar.dataset.i = i;
+          bar.setAttribute('aria-label', (i + 1) + '/' + list.length + ': ' + promptText(el).slice(0, 80));
+          rail.appendChild(bar);
+        });
+      }
+      rail.style.top = log.offsetTop + 'px';
+      rail.style.height = log.clientHeight + 'px';
+      rail.style.right = Math.max(0, log.offsetWidth - log.clientWidth) + 'px';  // 縦スクロールバーを塞がない
+      syncFromScroll();
+    }
+    function setCurrent(i) {
+      if (i === current) return;
+      current = i;
+      [...rail.children].forEach((bar, j) => {
+        bar.classList.toggle('on', j === i);
+        if (j === i) bar.setAttribute('aria-current', 'true'); else bar.removeAttribute('aria-current');
+      });
+    }
+    // 読んでいる位置（表示域の上から1/3）より上で始まった最後の発言を「今いる発言」とする。
+    function syncFromScroll() {
+      if (scrubbing || (current >= 0 && Date.now() < holdSyncUntil) || !prompts.length) return;
+      const line = log.getBoundingClientRect().top + log.clientHeight / 3;
+      let i = 0;
+      prompts.forEach((el, j) => { if (el.getBoundingClientRect().top <= line) i = j; });
+      setCurrent(i);
+    }
+    function jump(i, smooth) {
+      const el = prompts[i];
+      if (!el) return;
+      setCurrent(i);
+      holdSyncUntil = Date.now() + (smooth ? 700 : 150);  // 移動中のスクロール追従で強調が揺れないように
+      const top = log.scrollTop + el.getBoundingClientRect().top - log.getBoundingClientRect().top - 8;
+      log.scrollTo({ top: Math.max(0, top), behavior: smooth && !reduceMotion.matches ? 'smooth' : 'instant' });
+      showTip(i);
+    }
+    function showTip(i) {
+      const bar = rail.children[i];
+      if (!bar) return;
+      showWhileScrolling();
+      clearTimeout(tipTimer);
+      tip.textContent = promptText(prompts[i]) || '…';
+      tip.hidden = false;
+      rail.classList.add('engaged');
+      const viewTop = view.getBoundingClientRect().top;
+      const r = bar.getBoundingClientRect();
+      const max = view.clientHeight - tip.offsetHeight - 4;
+      tip.style.top = Math.max(4, Math.min(max, r.top + r.height / 2 - viewTop - tip.offsetHeight / 2)) + 'px';
+      if (!scrubbing) hideTip(1400);
+    }
+    function hideTip(delay) {
+      clearTimeout(tipTimer);
+      tipTimer = setTimeout(() => { tip.hidden = true; rail.classList.remove('engaged'); }, delay);
+    }
+    function barAt(y) {
+      let best = 0, dist = Infinity;
+      [...rail.children].forEach((bar, i) => {
+        const r = bar.getBoundingClientRect();
+        const d = Math.abs(r.top + r.height / 2 - y);
+        if (d < dist) { dist = d; best = i; }
+      });
+      return best;
+    }
+
+    // タップ＝その発言へ。押したまま棒の上をなぞる＝指の下の発言へ次々に移る。
+    rail.addEventListener('pointerdown', e => {
+      if (e.button > 0 || !prompts.length) return;
+      e.preventDefault();
+      scrubbing = true;
+      try { rail.setPointerCapture(e.pointerId); } catch (_) {}
+      jump(barAt(e.clientY), true);
+    });
+    rail.addEventListener('pointermove', e => {
+      if (!scrubbing) return;
+      const i = barAt(e.clientY);
+      if (i !== current) jump(i, false);
+    });
+    const endScrub = () => {
+      if (!scrubbing) return;
+      scrubbing = false;
+      showWhileScrolling();
+      hideTip(900);
+    };
+    rail.addEventListener('pointerup', endScrub);
+    rail.addEventListener('pointercancel', endScrub);
+    rail.addEventListener('lostpointercapture', endScrub);
+    // ホイール／トラックパッド＝1ノッチで1発言ずつ。慣性で連打されないよう間引く。
+    rail.addEventListener('wheel', e => {
+      if (!prompts.length) return;
+      e.preventDefault();
+      const now = Date.now();
+      if (Math.abs(e.deltaY) < 1 || now - lastWheel < 140) return;
+      lastWheel = now;
+      const next = Math.max(0, Math.min(prompts.length - 1, (current < 0 ? prompts.length : current) + Math.sign(e.deltaY)));
+      if (next !== current) jump(next, true);
+    }, { passive: false });
+    // キーボード：Enter/Space は click（pointer 由来の click は pointerdown で処理済み）、上下キーで隣へ。
+    rail.addEventListener('click', e => {
+      const bar = e.target.closest('.pr-bar');
+      if (bar && e.detail === 0) jump(Number(bar.dataset.i), true);
+    });
+    rail.addEventListener('keydown', e => {
+      if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+      e.preventDefault();
+      const next = Math.max(0, Math.min(prompts.length - 1, current + (e.key === 'ArrowUp' ? -1 : 1)));
+      jump(next, true);
+      if (rail.children[next]) rail.children[next].focus();
+    });
+
+    // History restore and incoming replies can scroll automatically; only reveal on user navigation.
+    const noteScrollIntent = () => { scrollIntentUntil = Date.now() + 1200; };
+    ['wheel', 'touchmove', 'pointerdown'].forEach(name => log.addEventListener(name, noteScrollIntent, { passive:true }));
+    log.addEventListener('keydown', e => {
+      if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(e.key)) noteScrollIntent();
+    });
+    log.addEventListener('scroll', () => {
+      if (Date.now() < scrollIntentUntil || rail.classList.contains('scrolling')) showWhileScrolling();
+      requestAnimationFrame(syncFromScroll);
+    }, { passive: true });
+    new MutationObserver(schedule).observe(log, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'class'] });
+    new MutationObserver(schedule).observe(view, { attributes: true, attributeFilter: ['hidden'] });
+    if (window.ResizeObserver) new ResizeObserver(schedule).observe(log);
+    schedule();
+    return { refresh: schedule, jump: jump };
+  })();
 
   // サイドバーの使用量パネルもこの1回の取得を使い回す（連続で叩くと 429 になる API のため二重に取らない）
   window.shukiUsageAccounts = fetch('/usage-accounts').then(r => r.json().then(d => {
@@ -3049,7 +3694,7 @@ def dock_html():
         "ATTACH": _chat_icon("attach"), "FOLDER": _chat_icon("folder"), "LAYERS": _chat_icon("layers"),
         "MIC": _chat_icon("mic"), "SEND": _chat_icon("send"),
         "HOURGLASS": _chat_icon("hourglass"), "PENCIL": _chat_icon("pencil", 22),
-        "SETTINGS": _chat_icon("settings"), "PLUS": _chat_icon("plus"),
+        "SETTINGS": _chat_icon("settings"), "SLIDERS": _chat_icon("sliders"), "PLUS": _chat_icon("plus"),
     }
     for name, icon in static_icons.items():
         html_out = html_out.replace("__ICON_" + name + "__", icon)
@@ -3124,11 +3769,36 @@ function renderWorkConversation(work) {
   renderMermaidIn(log);
   log.scrollTop = atBottom ? log.scrollHeight : scrollTop;
 }
+// 音声バーの見た目は「状態文言＋data-state」の1か所で決める（2026-10-10）。
+// 終了後に出る文言（エラー・採点結果など）だけはバーを開いたまま残す。
+function setVoiceStatus(text, error = false) {
+  const bar = byId('voice-bar'), on = voiceChat.active, muted = on && voiceChat.muted;
+  if (muted && /^Listening/.test(text)) text = 'Muted';
+  bar.dataset.state = error ? 'error' : !on ? 'off' : muted ? 'muted' : voiceChat.speaking ? 'hearing'
+    : voiceChat.busy || voiceChat.transcribing ? 'thinking' : 'listening';
+  const status = byId('voice-status');
+  status.textContent = text; status.title = text;
+  if (!on && text && text !== 'Microphone off') bar.hidden = false;
+  const mic = byId('voice-mute'), icon = muted ? 'mic-off' : 'mic';
+  if (mic.dataset.icon !== icon) { mic.innerHTML = UI_ICONS[icon]; mic.dataset.icon = icon; }
+  const label = !on ? 'Start voice chat' : muted ? 'Unmute microphone' : 'Mute microphone';
+  mic.title = label; mic.setAttribute('aria-label', label);
+  mic.setAttribute('aria-pressed', String(muted));
+  if (!on) mic.style.setProperty('--lvl', '0');
+  const end = byId('voice-end'), endLabel = on ? 'End voice chat' : 'Close';
+  end.title = endLabel; end.setAttribute('aria-label', endLabel);
+}
+function voiceMicButton() {
+  if (voiceChat.active) voiceChat.toggleMute(); else toggleVoiceConversation();
+}
+function voiceEndButton() {
+  if (voiceChat.active) voiceChat.end(); else byId('voice-bar').hidden = true;
+}
 const voiceChat = new VoiceConversation({
   mime: MIC_MIME,
   pause: () => Number(byId('voice-pause').value),
   state: text => {
-    byId('voice-status').textContent = text;
+    setVoiceStatus(text);
     const finish = byId('voice-ielts-finish');
     const answer = byId('voice-ielts-answer');
     if(answer) { answer.hidden=!voiceChat.active || !voiceChat.speakingPractice; answer.disabled=voiceChat.busy; }
@@ -3146,7 +3816,8 @@ const voiceChat = new VoiceConversation({
     // LLM用に合成した内部プロンプト全文（作業状態のJSON付き）をそのままユーザー発言として
     // 二重表示していた（実機報告：発言のたびに背景作業のJSONが吹き出しに混ざる）。
     if (on) stopWatch();
-    byId('voice-bar').hidden = false;
+    // 終了したらバーごと畳む（入力欄のマイクボタンが戻るので再開はそこから）。エラー時だけ error() が出し直す。
+    byId('voice-bar').hidden = !on;
     byId('voice-conversation-hint').hidden = !on;
     byId('chat-input').placeholder = on ? 'Say it or type it here…' : 'Continue the conversation…';
     byId('voice-btn').innerHTML = UI_ICONS.mic;
@@ -3164,10 +3835,12 @@ const voiceChat = new VoiceConversation({
   },
   language: lang => {
     const label = lang === 'ja' ? '日本語' : 'English';
-    byId('voice-language').textContent = label;
-    byId('voice-language').title = 'Active voice language: ' + label;
+    byId('voice-language').textContent = lang === 'ja' ? 'JA' : 'EN';
+    byId('voice-language').title = 'Voice language: ' + label + ' — tap to switch';
     byId('voice-language-select').value = lang;
   },
+  level: value => { byId('voice-mute').style.setProperty('--lvl', value.toFixed(2)); },
+  error: text => { byId('voice-bar').hidden = false; setVoiceStatus(text, true); },
   sources: (el, sources) => {
     const row = document.createElement('div'); row.className = 'voice-sources';
     row.setAttribute('aria-label', 'Notes checked');
@@ -3193,7 +3866,7 @@ const voiceChat = new VoiceConversation({
   workReply: () => byId('voice-work-reply').value,
   clearWorkReply: () => { byId('voice-work-reply').value = ''; },
   notice: text => addMsg('assistant', mdlite(text), text),
-  draft: text => { byId('voice-status').textContent = voiceChat.speakingPractice && text ? 'Answer captured — continue speaking or press Send answer.' : text || 'Listening'; },
+  draft: text => { setVoiceStatus(voiceChat.speakingPractice && text ? 'Answer captured — continue speaking or press Send answer.' : text || 'Listening'); },
   user: text => { byId('voice-conversation-hint').hidden = true; return addMsg('user', mdlite(text), text); },
   reply: () => addMsg('assistant', '…'),
   render: (el, text) => { el.innerHTML = mdlite(text); attachCopy(el, text); renderMermaidIn(el); },

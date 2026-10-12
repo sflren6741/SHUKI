@@ -146,12 +146,22 @@ def _group_has(children, active):
     return any(k == active for k, _label, _href in children)
 
 
-_NAV_GROUP_ICON_KEYS = {"do": "board", "reflect": "progress", "library": "files", "life": "control"}
-
-
 def _nav_icon_key(key):
-    """新しい目的別グループは、既存ページの線アイコンを代表アイコンとして使う。"""
-    return _NAV_GROUP_ICON_KEYS.get(key, key)
+    """目的別グループも専用アイコンを持つ（2026-10-11。以前は子ページのアイコンを借りていた）。"""
+    return key
+
+
+def nav_feature_groups():
+    """設定の「表示するメニュー」用。[(group_key, group_label, [(key, label, href), ...])]。
+    無効なプラグインのページは出さない（ナビにも出ないため）。"""
+    out = []
+    for key, label, _href, children in NAV_PAGES:
+        if children is None:
+            continue
+        items = [c for c in children if shuki_core.route_enabled(c[2])]
+        if items:
+            out.append((key, label, items))
+    return out
 
 
 def _visible_nav_pages(active):
@@ -162,13 +172,15 @@ def _visible_nav_pages(active):
     あったが、ホーム以外の全ページで「そのページ分」が毎回復活し、隠したページを順に開くと
     設定が丸ごと効いていないように見える不具合の原因になっていた（2026-09-01 方針A：隠した
     項目は現在地でも隠す）。現在地はページ見出し（page_header の h1）で分かるため、ナビから
-    消えても迷子にはならない。グループ（children持ち）は子を個別トグルせず親単位で開閉する。
+    消えても迷子にはならない。2026-10-11 からは子ページ単位でも隠せる（設定の「表示するメニュー」）。
+    子が全部隠れたグループはナビから消える。グループ自体の旧キー（do 等）が False なら子ごと隠す。
     """
     nav = dashboard_settings.load_settings().get("nav", {})
     out = []
     for key, label, href, children in NAV_PAGES:
         if children is not None:
-            children = [(k, label_, url) for k, label_, url in children if shuki_core.route_enabled(url)]
+            children = [(k, label_, url) for k, label_, url in children
+                        if shuki_core.route_enabled(url) and nav.get(k, True)]
             if not children:
                 continue
         elif href and not shuki_core.route_enabled(href):
@@ -309,9 +321,7 @@ def sidebar_panel_html():
             f'<a class="sb-link" href="{href}"{count_attr}>'
             f'<span class="sb-ico">{_sidebar_icon(icon_key)}</span>{t(label, ctx="sidebar")}'
             f'<span class="nav-badge" hidden></span></a>')
-    sidebar_js = _SIDEBAR_JS_TMPL.replace(
-        "__NO_HISTORY__", t("実行履歴は、まだありません", ctx="sidebar")).replace("__TURN_LABEL__", t("ターン", ctx="sidebar"))
-    sidebar_js = shuki_i18n.tt_js_ui(sidebar_js, ctx="sidebar")
+    sidebar_js = shuki_i18n.tt_js_ui(_SIDEBAR_JS_TMPL, ctx="sidebar")
     try:  # 差し込み部品が壊れても全ページのヘッダーを道連れにしない
         extra = _sidebar_extra_getter() if _sidebar_extra_getter else ""
     except Exception:
@@ -323,21 +333,22 @@ def sidebar_panel_html():
             f'title="{t("閉じる", ctx="sidebar")}">{dashboard_icons.ui_icon_svg("cross", 16)}</button></div>'
             f'<nav class="sb-links">{"".join(links)}</nav>{extra}'
             f'<section class="sb-sessions" aria-label="Sessions">'
-            f'<div id="sb-sessions-head" class="sb-hist-head">{dashboard_icons.ui_icon_svg("clock", 14)} Sessions</div>'
-            f'<button id="sb-session-review" class="sb-session-control" type="button" onclick="shukiSessionsReview()">Review with AI</button>'
-            f'<p class="sb-session-help">Track work separately from reply results. AI suggests what to resume; you set the status.</p>'
-            f'<label class="sb-session-label" for="sb-session-filter">Show sessions</label>'
-            f'<select id="sb-session-filter" class="sb-session-control" onchange="shukiSessionsFilter()">'
-            f'<option value="attention">Needs attention</option><option value="unfinished">Unfinished</option>'
-            f'<option value="unreviewed">Unreviewed</option><option value="waiting">Waiting for you</option>'
-            f'<option value="done">Completed</option><option value="closed">Closed</option><option value="all">All sessions</option></select>'
+            f'<div class="sb-session-toolbar">'
+            f'<div id="sb-sessions-head" class="sb-hist-head">{dashboard_icons.ui_icon_svg("clock", 14)} Sessions '
+            f'<span id="sb-session-count" class="sb-session-help"></span></div>'
+            f'<button id="sb-session-options" class="sb-session-control" type="button" aria-expanded="false" '
+            f'aria-controls="sb-session-tools" onclick="shukiSessionsOptions()">Options</button></div>'
+            f'<div id="sb-session-tools" class="sb-session-tools" hidden>'
+            f'<select id="sb-session-filter" class="sb-session-control" aria-label="Show sessions" onchange="shukiSessionsFilter()">'
+            f'<option value="unfinished">Not done</option><option value="waiting">Waiting</option>'
+            f'<option value="done">Done</option><option value="all">All</option></select>'
+            f'<button id="sb-session-review" class="sb-session-control" type="button" onclick="shukiSessionsReview()">Review with AI</button></div>'
             f'<input id="sb-session-search" class="sb-session-control" type="search" aria-label="Search sessions" '
             f'placeholder="Search sessions" maxlength="200" oninput="shukiSessionsSearch()">'
             f'<p id="sb-session-message" class="sb-session-help" role="status" aria-live="polite"></p>'
             f'<ul id="sb-hist" class="hist-list"><li class="muted empty">…</li></ul>'
             f'<button id="sb-session-more" class="sb-session-control" type="button" onclick="shukiSessionsMore()" hidden>Show more</button>'
-            f'</section><details class="sb-runs"><summary>Recent execution results</summary>'
-            f'<ul id="sb-run-hist" class="hist-list"><li class="muted empty">…</li></ul></details>'
+            f'</section>'
             f'</aside>{sidebar_js}')
     return shuki_i18n.tt_html(panel, ctx="sidebar")
 
@@ -367,6 +378,7 @@ function shukiSidebarOpen() {
   }, 4000);
 }
 function shukiSidebarClose() {
+  shukiSessionsOptions(false);
   clearInterval(shukiSessionRefreshTimer);
   document.getElementById('sb-overlay').classList.remove('on');
   document.getElementById('sb-panel').classList.remove('on');
@@ -384,37 +396,19 @@ function shukiSidebarLoad() {
     var tb = document.getElementById('sb-trigger-badge');
     if (total) { tb.textContent = total > 99 ? '99+' : total; tb.hidden = false; }
     else { tb.hidden = true; }
-    var hist = document.getElementById('sb-run-hist');
-    hist.innerHTML = '';
-    if (!d.history || !d.history.length) {
-      var li = document.createElement('li');
-      li.className = 'muted empty';
-      li.textContent = '__NO_HISTORY__';
-      hist.appendChild(li);
-      return;
-    }
-    d.history.forEach(function(h) {
-      var li = document.createElement('li');
-      li.className = 'hist-item' + (h.session ? '' : ' no-resume');
-      li.dataset.resumeSession = h.session || '';
-      li.dataset.resumeLabel = h.label || '';
-      li.dataset.resumeModel = h.model || '';
-      [['hist-when', h.updated || ''],
-       ['hist-skill', h.label || ''],
-       ['hist-outcome hist-outcome-' + h.outcome, h.outcome_label || ''],
-       ['hist-summary', h.summary || ''],
-       ['hist-turns', (h.turns == null ? 1 : h.turns) + '__TURN_LABEL__']].forEach(function(p) {
-        var span = document.createElement('span');
-        span.className = p[0]; span.textContent = p[1];
-        if (p[0].startsWith('hist-outcome') && p[1])
-          shukiSetIconLabel(span, ({ok:'check',review:'eye',incomplete:'warn',running:'loading'})[h.outcome] || 'dot', p[1]);
-        li.appendChild(span);
-      });
-      hist.appendChild(li);
-    });
   }).catch(function() {});
 }
-document.addEventListener('keydown', function(e) { if (e.key === 'Escape') shukiSidebarClose(); });
+document.addEventListener('keydown', function(e) {
+  if (e.key !== 'Escape') return;
+  if (!document.getElementById('sb-session-tools').hidden) {
+    shukiSessionsOptions(false); document.getElementById('sb-session-options').focus();
+  } else shukiSidebarClose();
+});
+function shukiSessionsOptions(open) {
+  var tools = document.getElementById('sb-session-tools');
+  tools.hidden = typeof open === 'boolean' ? !open : !tools.hidden;
+  document.getElementById('sb-session-options').setAttribute('aria-expanded', String(!tools.hidden));
+}
 var shukiSessionData = {items: [], states: {}};
 var shukiSessionLimit = 8;
 var shukiSessionSequence = 0;
@@ -422,7 +416,8 @@ var shukiSessionLoading = false;
 var shukiSessionSearchTimer;
 try {
   var savedSessionFilter = localStorage.getItem('shuki-session-filter-v1');
-  if (['attention','unfinished','unreviewed','waiting','done','closed','all'].includes(savedSessionFilter))
+  savedSessionFilter = {attention:'unfinished',unreviewed:'unfinished',closed:'done'}[savedSessionFilter] || savedSessionFilter;
+  if (['unfinished','waiting','done','all'].includes(savedSessionFilter))
     document.getElementById('sb-session-filter').value = savedSessionFilter;
 } catch (_) {}
 function shukiSessionQuery() {
@@ -441,7 +436,7 @@ async function shukiSessionsLoad(refresh) {
   if (refresh === true && shukiSessionLoading) return;
   var sequence = ++shukiSessionSequence;
   shukiSessionLoading = true;
-  if (refresh !== true) shukiSessionLimit = 8;
+  if (refresh !== true) { shukiSessionLimit = 8; document.getElementById('sb-hist').scrollTop = 0; }
   var message = document.getElementById('sb-session-message');
   if (refresh !== true) message.textContent = 'Loading sessions…';
   try {
@@ -457,8 +452,10 @@ async function shukiSessionsLoad(refresh) {
 }
 function shukiSessionsRender() {
   var hist = document.getElementById('sb-hist');
-  hist.replaceChildren();
   var items = shukiSessionData.items || [];
+  var scrollTop = hist.scrollTop;
+  var expanded = new Set(Array.from(hist.querySelectorAll('details[open]')).map(function(el) { return el.dataset.sessionKey; }));
+  hist.replaceChildren();
   items.slice(0, shukiSessionLimit).forEach(function(item) {
     var row = document.createElement('li'); row.className = 'hist-item sb-session-item';
     var title = document.createElement(item.session ? 'button' : 'span');
@@ -469,12 +466,26 @@ function shukiSessionsRender() {
       title.title = 'Resume ' + item.label;
     }
     row.appendChild(title);
+    var preview = document.createElement('span'); preview.className = 'hist-summary';
+    var savedSummary = item.summary || '';
+    var genericSummary = /^(done|completed|ok|okay|yes|no|完了|了解|了解です)[.!。！]?$/i.test(savedSummary.replace(/[*#]/g, '').trim());
+    preview.textContent = item.review_excluded ? 'Preview unavailable for this session.'
+      : (item.running || genericSummary ? item.last_request || savedSummary : savedSummary || item.last_request) || 'No saved summary.';
+    preview.title = preview.textContent;
+    row.appendChild(preview);
+    var details = document.createElement('details'); details.className = 'sb-session-details';
+    details.dataset.sessionKey = item.key; details.open = expanded.has(item.key);
+    var summary = document.createElement('summary');
+    summary.textContent = item.running ? 'Running' : item.work_status_label;
+    summary.title = [summary.textContent, item.updated].filter(Boolean).join(' · ');
+    summary.setAttribute('aria-label', 'Details for ' + item.label + ': ' + summary.title);
+    details.appendChild(summary);
     [['hist-when', item.updated], ['hist-turns', item.turns + ' turns'],
      ['hist-outcome hist-outcome-' + item.outcome, ({running:'Running',ok:'Reply finished',review:'Decision requested',incomplete:'Reply interrupted'})[item.outcome] || 'Reply status unknown'],
      ['hist-request', item.last_request ? 'Last request: ' + item.last_request : ''],
-     ['hist-summary', item.summary || 'No saved summary. Open the session for its context.']].forEach(function(part) {
+     ['hist-full-summary', item.summary || (item.review_excluded ? 'Preview unavailable for this session.' : 'No saved summary.')]].forEach(function(part) {
       if (!part[1]) return;
-      var span = document.createElement('span'); span.className = part[0]; span.textContent = part[1]; row.appendChild(span);
+      var span = document.createElement('span'); span.className = part[0]; span.textContent = part[1]; details.appendChild(span);
     });
     var select = document.createElement('select'); select.className = 'sb-session-control';
     select.setAttribute('aria-label', 'Work status for ' + item.label);
@@ -485,15 +496,20 @@ function shukiSessionsRender() {
     select.disabled = !!item.running;
     if (item.running) select.title = 'Wait for the current reply before changing work status.';
     select.addEventListener('change', function() { shukiSessionsSave(item, select); });
-    row.appendChild(select); hist.appendChild(row);
+    details.appendChild(select); row.appendChild(details); hist.appendChild(row);
   });
   if (!items.length) {
     var empty = document.createElement('li'); empty.className = 'muted empty';
     empty.textContent = 'No sessions match this filter.'; hist.appendChild(empty);
   }
   document.getElementById('sb-session-more').hidden = items.length <= shukiSessionLimit;
-  document.getElementById('sb-session-message').textContent = 'Showing ' + Math.min(items.length, shukiSessionLimit) + ' of ' + items.length
-    + '. Unreviewed sessions may already be finished.';
+  document.getElementById('sb-session-count').textContent = Math.min(items.length, shukiSessionLimit) + ' / ' + items.length;
+  var filter = document.getElementById('sb-session-filter');
+  var options = document.getElementById('sb-session-options');
+  options.textContent = filter.value === 'unfinished' ? 'Options' : filter.selectedOptions[0].textContent;
+  options.setAttribute('aria-label', 'Session options: ' + filter.selectedOptions[0].textContent);
+  document.getElementById('sb-session-message').textContent = '';
+  hist.scrollTop = scrollTop;
 }
 function shukiSessionsMore() { shukiSessionLimit += 8; shukiSessionsRender(); }
 async function shukiSessionsSave(item, select) {
@@ -534,12 +550,14 @@ def _bgm_widget_html():
     （設定への書き戻しは不要・ページを閉じれば止まる想定でよい・2026-08-21）。"""
     return """<audio id="shuki-bgm" src="/bgm/dreambyte_loop.mp3" loop preload="none"></audio>
 <button type="button" id="shuki-bgm-btn" class="shuki-bgm-btn" title="__BGM_TITLE__" aria-pressed="false"
-  style="position:fixed;right:14px;bottom:76px;z-index:40;width:44px;height:44px;border-radius:50%;
-  border:1px solid var(--line);background:var(--card);color:var(--fg);font-size:18px;cursor:pointer;
+  style="position:fixed;right:14px;bottom:84px;z-index:40;width:32px;height:32px;box-sizing:border-box;
+  padding:0;border-radius:50%;border:1px solid var(--line);background:var(--card);color:var(--fg);font-size:16px;cursor:pointer;
   box-shadow:0 2px 8px rgba(0,0,0,.25);">__BGM_ICON__</button>
 <style>
+  .shuki-bgm-btn { display:inline-flex; align-items:center; justify-content:center; }
+  .shuki-bgm-btn::before { content:''; position:absolute; inset:-7px; }
   .shuki-bgm-btn.on { background:var(--accent); color:#fff; }
-  @media (min-width: 701px) { .shuki-bgm-btn { bottom:14px; } }
+  @media (min-width: 701px) { .shuki-bgm-btn { bottom:14px !important; } }
 </style>
 <script>
 (function(){
@@ -723,7 +741,7 @@ RESPONSIVE_CSS = """
     padding:10px max(var(--page-pad-x, 0px), 16px) 8px; }
   /* min-height は、追加操作を .hd-extra に持つページ(30px)と持たないページ(h1 の 24.5px)で
      ヘッダー総高が変わらないようにするため（2026-08-06 実測して統一）。 */
-  .hd-top { display:flex; align-items:center; gap:12px; margin-bottom:8px; min-height:44px; }
+  .hd-top { display:flex; align-items:center; gap:12px; margin-bottom:6px; min-height:40px; }
   /* margin:0 は必須。静的4ページは動的ページと違い `* { margin:0 }` リセットを持たないため、
      指定しないとUA既定の h1 マージン(0.67em≒24.7px)だけヘッダーが高くなる（2026-08-06 実測）。 */
   .hd-top h1 { font-size:1.15rem; margin:0; white-space:nowrap; display:flex; align-items:center; gap:8px; }
@@ -739,8 +757,9 @@ RESPONSIVE_CSS = """
     border-radius:8px; padding:4px 12px; cursor:pointer; font-size:.85rem; text-decoration:none;
     display:inline-flex; align-items:center; gap:4px; }
   .hbtn:hover { color:var(--fg); border-color:var(--accent); }
-  .navlink { color:var(--muted); text-decoration:none; font-size:.875rem; padding:8px 14px;
-    min-height:44px; border:1px solid transparent; border-radius:8px; white-space:nowrap; flex-shrink:0;
+  /* §6.2 (2026-10-11): desktop-only, mouse-driven nav = S size 32 px (was a 44 px visible box). */
+  .navlink { color:var(--muted); text-decoration:none; font-size:.875rem; padding:0 12px;
+    min-height:32px; box-sizing:border-box; border:1px solid transparent; border-radius:8px; white-space:nowrap; flex-shrink:0;
     display:inline-flex; align-items:center; gap:5px; }
   .navlink svg { flex-shrink:0; }
   .navlink:hover { color:var(--fg); background:var(--surface-control); }
@@ -797,7 +816,15 @@ RESPONSIVE_CSS = """
     body { font-size:1rem; }
     body:not(.no-bn-pad) { padding-bottom:70px !important; }
     .hd-nav { display:none; }  /* 下部タブバーと重複するため非表示（ページ固有操作は .hd-extra に残る） */
-    .hbtn { min-height:44px; min-width:44px; justify-content:center; }
+    /* 密度（🖥 UIデザイン原則 §6.2・2026-10-11）: ナビ行が無いスマホではタイトル行の下余白（8px）が
+       空振りしてヘッダーが71pxあった。上下8px＋40px行＝約57pxに詰める（マスコットは負マージンで
+       見た目44px・行の取り分36px）。 */
+    header { padding-top:8px; padding-bottom:8px; }
+    .hd-top { margin-bottom:0; min-height:40px; }
+    /* §6.2 (2026-10-11): S size 32 px visible; the transparent ::before restores a 44 px tap height
+       (was a 44 px visible box, which also pushed page headers with .hd-extra buttons to 61 px). */
+    .hbtn { position:relative; box-sizing:border-box; min-height:32px; min-width:32px; justify-content:center; }
+    .hbtn::before { content:''; position:absolute; inset:-7px -1px; }
     .bottom-nav { display:flex; z-index:1000; background:var(--card);
       border-top:1px solid var(--line); padding:6px 4px calc(6px + env(safe-area-inset-bottom));
       gap:2px; flex-shrink:0; }
@@ -867,23 +894,43 @@ RESPONSIVE_CSS = """
   .sb-ico { display:inline-flex; color:var(--muted); flex-shrink:0; }
   .sb-hist-head { display:flex; align-items:center; gap:5px; color:var(--muted); font-size:.85rem;
     border-top:1px solid var(--line); padding-top:10px; }
-  .sb-sessions { display:flex; flex-direction:column; gap:8px; min-width:0; }
+  .sb-sessions { display:flex; flex-direction:column; gap:4px; min-width:0;
+    border-top:1px solid var(--line); padding-top:4px; }
+  .sb-session-toolbar { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .sb-session-toolbar .sb-hist-head { border:0; padding:0; min-width:0; }
+  .sb-session-toolbar .sb-session-control { width:auto; padding:4px 8px; }
+  .sb-session-tools { display:flex; flex-direction:column; gap:4px; }
+  .sb-session-tools[hidden] { display:none; }
+  #sb-session-message:empty { display:none; }
+  #sb-hist { max-height:min(32svh,240px); overflow-y:auto; margin:0; gap:3px;
+    scrollbar-gutter:stable; overscroll-behavior:contain; }
   .sb-session-help { color:var(--muted); font-size:.76rem; line-height:1.5; margin:0; overflow-wrap:anywhere; }
   .sb-session-label { font-size:.8rem; }
   .sb-session-control { width:100%; min-height:44px; box-sizing:border-box; border:1px solid var(--line);
     border-radius:8px; padding:8px; background:var(--surface-control); color:var(--fg); font:inherit; font-size:.82rem; }
   button.sb-session-control { cursor:pointer; }
   .sb-session-control:disabled { opacity:.65; }
-  .sb-session-item { cursor:default; }
-  .sb-session-title { flex:1 1 100%; min-width:0; min-height:44px; padding:4px 0; border:0;
-    background:none; color:var(--accent); font:inherit; font-weight:bold; text-align:left; overflow-wrap:anywhere; }
+  .sb-session-item { cursor:default; display:grid; grid-template-columns:minmax(0,1fr) minmax(44px,100px);
+    gap:0 4px; align-items:start; padding:0 6px; font-size:.76rem; }
+  .sb-session-title { grid-column:1; grid-row:1; min-width:0; min-height:44px; padding:4px 0; border:0;
+    background:none; color:var(--accent); font:inherit; font-weight:bold; text-align:left;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  span.sb-session-title { display:flex; align-items:center; }
   button.sb-session-title { cursor:pointer; }
+  .sb-session-details { grid-column:2; grid-row:1; min-width:0; }
+  .sb-session-details[open] { grid-column:1 / -1; grid-row:3; }
+  .sb-session-details summary { min-height:44px; display:flex; align-items:center; gap:6px;
+    cursor:pointer; color:var(--muted); font-size:.7rem; line-height:1.2; overflow-wrap:anywhere; }
+  .sb-session-details summary::after { content:'▾'; margin-left:auto; }
+  .sb-session-details[open] summary::after { content:'▴'; }
+  .sb-session-details > span { display:block; margin-bottom:6px; overflow-wrap:anywhere; }
+  .sb-session-details:focus-within { outline-color:var(--accent); }
   .sb-session-item .hist-summary, .sb-session-item .hist-request { flex:1 1 100%; min-width:0;
     white-space:normal; overflow-wrap:anywhere; display:-webkit-box; -webkit-box-orient:vertical;
-    -webkit-line-clamp:3; overflow:hidden; line-height:1.5; }
+    -webkit-line-clamp:1; overflow:hidden; line-height:1.5; }
   .sb-session-item .hist-request { color:var(--muted); font-size:.76rem; -webkit-line-clamp:2; }
-  .sb-runs { font-size:.82rem; color:var(--muted); }
-  .sb-runs summary { min-height:44px; display:flex; align-items:center; cursor:pointer; }
+  .sb-session-item > .hist-summary { grid-column:1 / -1; grid-row:2; margin-bottom:4px;
+    font-size:.72rem; line-height:1.4; -webkit-line-clamp:2; }
   @media (max-width: 700px) { .sb-panel { width:min(280px, 82vw); } }
   /* Claude/Codex 使用量パネル。2026-10-08 にホームからサイドバーへ移した（ホームを書く画面に
      絞ったため）。ログイン切れが近い時はトリガー自体を赤くする（.sb-warn）。 */

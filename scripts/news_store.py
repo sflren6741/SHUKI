@@ -7,7 +7,8 @@ hand-edited ``feeds.json`` is configuration and always stays a file.
 
 Watches are application data: the daily fetch closes them. In the database a
 closed watch keeps its status (``hit``/``expired``) and the article it found
-instead of disappearing. Add one with ``python news_store.py watch "<query>"``.
+instead of disappearing. Add one with ``python news_store.py watch "<query>"``
+or from the dashboard's /news/sources page, which also lists and edits feeds.
 
 ``import_legacy``/``export_legacy`` round-trip the legacy files exactly; the
 migration's parity check compares their parsed content.
@@ -216,6 +217,19 @@ def save_seen(seen):
 
 # ── Ratings ────────────────────────────────────────────────────────────────
 
+def load_read_state():
+    """Read acknowledgements are independent of selection feedback; no DB migration."""
+    data = _read_json(shuki_paths.runtime_target("news/read_state.json"))
+    entries = data.get("entries") if isinstance(data, dict) else None
+    return entries if isinstance(entries, dict) else {}
+
+
+def mark_read(url, timestamp, write_entries):
+    entries = load_read_state()
+    entries[url] = {"ts": timestamp}
+    write_entries(shuki_paths.runtime_target("news/read_state.json"), entries)
+
+
 def _rating_dict(row):
     out = {"value": row["value"]}
     if row["rated_at"] is not None:
@@ -324,6 +338,73 @@ def add_watch(query, expires=None, today=None):
     return watch
 
 
+# ── Feeds (hand-editable config, shown and edited on /news/sources) ────────
+
+FEED_FIELD_MAX = 200
+
+
+def feeds_file():
+    news_dir = shuki_paths.bootstrap_path("news", shuki_paths.system_dir_for(shuki_paths.VAULT) / "news")
+    return Path(news_dir) / "feeds.json"
+
+
+def load_feeds():
+    data = _read_json(feeds_file())
+    feeds = data.get("feeds") if isinstance(data, dict) else None
+    return [f for f in feeds if isinstance(f, dict)] if isinstance(feeds, list) else []
+
+
+def _save_feeds(feeds):
+    """Rewrite feeds.json one feed per line (it stays readable by hand) and keep other keys."""
+    path = feeds_file()
+    data = _read_json(path)
+    extra = {k: v for k, v in data.items() if k != "feeds"} if isinstance(data, dict) else {}
+    rows = ",\n".join("    " + json.dumps(f, ensure_ascii=False) for f in feeds)
+    text = '{\n  "feeds": [\n' + rows + ("\n" if rows else "") + "  ]"
+    for key, value in extra.items():
+        text += ",\n  " + json.dumps(key, ensure_ascii=False) + ": " + json.dumps(value, ensure_ascii=False)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(text + "\n}\n", encoding="utf-8")
+    tmp.replace(path)
+
+
+def add_feed(name, url, category, via="page", today=None):
+    """``via`` records who registered it ("page" form or "ai" conversation) for the Sources list."""
+    name, url, category = ((v or "").strip() for v in (name, url, category))
+    if not url.startswith(("http://", "https://")):
+        raise ValueError("A feed URL must start with http:// or https://.")
+    if not name or not category:
+        raise ValueError("A feed needs a name and a category.")
+    if max(len(name), len(url), len(category)) > FEED_FIELD_MAX:
+        raise ValueError(f"Keep each field under {FEED_FIELD_MAX} characters.")
+    feeds = load_feeds()
+    if any(f.get("url") == url for f in feeds):
+        raise ValueError("This feed is already registered.")
+    feed = {"name": name, "url": url, "category": category,
+            "added": today or date.today().isoformat(), "via": "ai" if via == "ai" else "page"}
+    _save_feeds(feeds + [feed])
+    return feed
+
+
+def remove_feed(url):
+    feeds = load_feeds()
+    kept = [f for f in feeds if f.get("url") != url]
+    if len(kept) == len(feeds):
+        raise ValueError("That feed is not registered.")
+    _save_feeds(kept)
+
+
+def feed_ratings():
+    """Good/bad counts per feed name (ratings keep the article's source name)."""
+    counts = {}
+    for entry in load_ratings().values():
+        value = entry.get("value") if isinstance(entry, dict) else None
+        if value in ("good", "bad") and entry.get("source"):
+            counts.setdefault(entry["source"], {"good": 0, "bad": 0})[value] += 1
+    return counts
+
+
 # ── Conversion and rollback (used by runtime_data_migrate.py) ──────────────
 
 def legacy_records(folder):
@@ -427,17 +508,53 @@ def counts(conn):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="News watch helper")
+    parser = argparse.ArgumentParser(description="News sources helper (feeds and watches)")
     sub = parser.add_subparsers(dest="action", required=True)
     add = sub.add_parser("watch", help="Open a one-shot watch")
     add.add_argument("query")
     add.add_argument("--expires", help="YYYY-MM-DD (default: 30 days from today)")
     sub.add_parser("watches", help="List open watches")
+    stop = sub.add_parser("watch-stop", help="Stop an open watch")
+    stop.add_argument("id")
+    sub.add_parser("feeds", help="List feeds with good/bad rating counts")
+    check = sub.add_parser("feed-check", help="Fetch a feed URL once without saving it")
+    check.add_argument("url")
+    feed = sub.add_parser("feed-add", help="Check a feed URL, then register it")
+    feed.add_argument("url")
+    feed.add_argument("--category", required=True)
+    feed.add_argument("--name", help="default: the feed's own title")
+    feed.add_argument("--via", choices=("ai", "page"), default="ai")
+    drop = sub.add_parser("feed-remove", help="Unregister a feed by URL")
+    drop.add_argument("url")
     args = parser.parse_args(argv)
-    if args.action == "watch":
-        result = add_watch(args.query, args.expires)
-    else:
-        result = load_watches()
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")  # feed names are Japanese; cp932 consoles break
+    try:
+        if args.action == "watch":
+            result = add_watch(args.query, args.expires)
+        elif args.action == "watch-stop":
+            if not any(w.get("id") == args.id for w in load_watches()):
+                raise ValueError("That watch is not active.")
+            close_watches({args.id}, {}, date.today().isoformat())
+            result = {"stopped": args.id}
+        elif args.action == "feeds":
+            ratings = feed_ratings()
+            result = [dict(f, ratings=ratings.get(f.get("name"), {"good": 0, "bad": 0}))
+                      for f in load_feeds()]
+        elif args.action in ("feed-check", "feed-add"):
+            import news_fetch  # lazy: news_fetch imports this module
+            info = news_fetch.check_feed(args.url)
+            result = dict(info, url=args.url)
+            if args.action == "feed-add":
+                result = add_feed(args.name or info["title"], args.url, args.category, via=args.via)
+        elif args.action == "feed-remove":
+            remove_feed(args.url)
+            result = {"removed": args.url}
+        else:
+            result = load_watches()
+    except ValueError as error:
+        print(json.dumps({"error": str(error)}, ensure_ascii=False))
+        return 1
     print(json.dumps(result, ensure_ascii=False, indent=1))
     return 0
 

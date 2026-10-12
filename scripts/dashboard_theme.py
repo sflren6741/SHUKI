@@ -242,14 +242,19 @@ html body :is(h2,h3) { font-weight:650; line-height:1.35; }
 html body .hd-top h1 { font-size:1.375rem; font-weight:650; }
 html body :is(.card,.panel,.area-card,.acc-card,.method-card) {
   border-radius:var(--radius); box-shadow:none; }
-html body :is(.panel,.area-card,.acc-card) { padding:var(--space-4); }
+/* §6.2 (2026-10-11): panel inner padding is 16 px on desktop and 12 px on phones; 24 px+ is for
+   page-level section gaps only. */
+html body :is(.panel,.area-card,.acc-card) { padding:var(--space-3); }
 html body :is(.life-grid,.accounts-band,.sum-grid) { gap:var(--space-3); }
 html body :is(.panel h2,.card h2,.acc-head) { font-size:1rem; }
 html body :is(.panel .sub,.card .hint,.sum-label,.sum-sub,.acc-reset) {
   font-size:.8125rem; line-height:1.6; }
 html body :is(.filter-bar,.toolbar) { background:var(--card); padding:12px 16px; }
-html body :is(.filter-bar input,.filter-bar select,.mode-btn) {
-  border-radius:8px; min-height:40px; }
+/* §6.2 (2026-10-11): toolbar fields are M size (40 px) at every width; .mode-btn tabs are S size
+   (32 px) with a transparent ::before restoring a 44 px tap height. */
+html body :is(.filter-bar input,.filter-bar select) { border-radius:8px; min-height:40px; }
+html body .mode-btn { position:relative; box-sizing:border-box; border-radius:8px; min-height:32px; }
+html body .mode-btn::before { content:''; position:absolute; inset:-7px -1px; }
 html body :is(input[type=text],input[type=search],textarea,select) {
   background:var(--surface-control); border-color:var(--control-line); }
 html body #chat-fab { color:var(--bg); box-shadow:none; }
@@ -267,11 +272,39 @@ html body .ach-bar-fill { background:var(--accent); box-shadow:none; }
 html body :is(.focus-memo input,.memo-send,.memo-journal-link) { border-radius:8px; min-height:44px; }
 html body :is(.sum-val,.streak-num) { font-weight:650; font-variant-numeric:tabular-nums; }
 @media(max-width:700px) {
-  html body :is(.panel,.area-card,.acc-card,.focus-band) { padding:var(--space-3); }
+  html body :is(.panel,.area-card,.acc-card,.focus-band) { padding:12px; }
   html body .focus-title { font-size:1.25rem; }
   html body .focus-memo { flex-wrap:wrap; }
   html body .focus-memo input { flex-basis:100%; }
-  html body :is(.filter-bar input,.filter-bar select,.mode-btn) { min-height:44px; }
+  html body :is(.filter-bar,.toolbar) { padding:8px 12px; }
+}
+"""
+
+SELECT_CSS = """
+/* Shared native selectors retain each platform's picker and form semantics. */
+html body select {
+  box-sizing:border-box; min-height:32px !important; max-width:100%;
+  background-color:var(--card) !important; color:var(--fg) !important;
+  border:1px solid var(--control-line) !important; border-radius:var(--radius);
+  font-family:inherit; line-height:1.3; cursor:pointer;
+}
+html body select:not([multiple]):not([size]) {
+  appearance:none; padding:4px 32px 4px 12px !important;
+  background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
+    linear-gradient(135deg,var(--muted) 50%,transparent 50%) !important;
+  background-position:calc(100% - 17px) 50%,calc(100% - 12px) 50% !important;
+  background-size:5px 5px !important; background-repeat:no-repeat !important;
+}
+/* §6.2 (2026-10-11): dropdowns are S size (32 px) in panels and M size (40 px) in toolbars; was 44 px
+   everywhere. A select cannot carry a ::before tap extension, so 32 px is its tap size (WCAG 2.2 AA).
+   The sidebar session list keeps 44 px until it is reviewed on its own. */
+html body :is(.filter-bar,.toolbar) select { min-height:40px !important; }
+html body .sb-sessions select { min-height:44px !important; }
+html body select:hover:not(:disabled) { border-color:var(--accent) !important; }
+html body select:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+html body select:disabled { opacity:.55; cursor:default; }
+@media(forced-colors:active) {
+  html body select:not([multiple]):not([size]) { appearance:auto; background-image:none !important; }
 }
 """
 
@@ -462,6 +495,7 @@ def theme_css(settings=None) -> str:
         if acc and dashboard_settings.HEX_RE.match(acc):
             pal = recolor_matrix(pal, acc)
     rows = [f"  --{k}: {v};" for k, v in pal.items()]
+    rows.append('  color-scheme: ' + ('light' if _is_light(pal['card']) else 'dark') + ';')
     mascot_color = dashboard_settings.sanitize(settings)["mascot_color"]
     rows.append(f"  --mascot-color: {mascot_color};")
     # Selected data-visualization ramp; keep chart ink distinct from status colours.
@@ -487,7 +521,7 @@ def theme_css(settings=None) -> str:
     rows += [f"  --rarity-{name}: {hexv};" for name, hexv in RARITY_C.items()]
     rows += [f"  --medal-{name}: {hexv};" for name, hexv in MEDAL_C.items()]
     css = ":root {\n" + "\n".join(rows) + "\n}\n"
-    css += s_css
+    css += s_css + SELECT_CSS
     # 飾りは matrix（走査線という別の飾りを既に持つ）とは併用しない
     if style not in MATRIX_STYLE_KEYS:
         css += DECOR_CSS.get(settings.get("decor", dashboard_settings.DEFAULT_DECOR), "")

@@ -73,7 +73,7 @@ python scripts/news_fetch.py --init-feeds research --topic "graph neural network
 python scripts/news_fetch.py
 ```
 
-- 購読先と関心は `<vault>/99_System/news/feeds.json`（`interests` に「何を重要とみなすか」を書くほど選定が効く）
+- 購読先と関心は `<vault>/99_System/news/feeds.json`（`interests` に「何を重要とみなすか」を書くほど選定が効く）。購読フィードとウォッチはダッシュボードの `/news/sources` でも一覧・追加・削除できる
 - **既読管理があるので毎日動かす必要はない** — 3日ぶりに実行すれば3日分がまとめて出る
 - 新着0件なら claude を呼ばない（実行コストゼロ）
 - **URL捏造の防止が設計の核**：AI が触れるのは「候補一覧のどの url を選ぶか」と一言の理由だけで、生成後に url が候補集合に実在するか機械検証し、無いものは破棄する。タイトル・出典・日付は候補側の値で復元するので、記事内容そのものの幻覚が構造的に起きない

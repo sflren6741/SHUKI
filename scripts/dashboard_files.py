@@ -53,7 +53,8 @@ PAGE = """<!DOCTYPE html>
   .filter-bar select, .filter-bar input[type=search] { background:var(--card); border:1px solid var(--line);
     color:var(--fg); border-radius:2px; padding:4px 9px; font-size:.8rem; font-family:inherit; }
   .filter-bar select:focus, .filter-bar input[type=search]:focus { outline:none; border-color:var(--accent); }
-  .filter-bar input[type=search] { width:170px; }
+  /* §6.2: search is a text input (M=40px), including on narrow screens. */
+  .filter-bar input[type=search] { width:170px; height:40px; min-height:40px; box-sizing:border-box; }
 """ + dashboard_facets.engine_css() + dashboard_facets.views_css() + """
   #rq-sentinel { padding:14px; text-align:center; color:var(--muted); font-size:.76rem; }
   #loading, #empty-state { display:flex; align-items:center; justify-content:center;
@@ -251,22 +252,37 @@ PAGE = """<!DOCTYPE html>
 </main>
 <!--SHUKI_BOTTOM_NAV-->
 
-<script src="/assets/mermaid.min.js"></script>
 <script>
 let ALL = [], MAP = {};
 
 const _cs = getComputedStyle(document.documentElement);
 const _cv = name => _cs.getPropertyValue(name).trim();
-if (window.mermaid) {
-  mermaid.initialize({
-    startOnLoad: false, theme: 'base',
-    themeVariables: {
-      background: _cv('--bg'), primaryColor: _cv('--card'), primaryTextColor: _cv('--fg'),
-      primaryBorderColor: _cv('--line'), lineColor: _cv('--muted'),
-      secondaryColor: _cv('--card'), tertiaryColor: _cv('--bg'),
-      fontFamily: _cv('--font-ui')
-    }
-  });
+// mermaid.js（3MB超）は図があるプレビューを開いた時だけ読み込む（2026-10-11）。
+// 以前は <script src> で毎回同期読み込みし、ページの表示可能時刻を ~0.3秒遅らせていた。
+let _pvMermaidLoading = null;
+function loadPreviewMermaid() {
+  if (window.mermaid) return Promise.resolve();
+  if (!_pvMermaidLoading) {
+    _pvMermaidLoading = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = '/assets/mermaid.min.js';
+      s.onload = () => {
+        mermaid.initialize({
+          startOnLoad: false, theme: 'base',
+          themeVariables: {
+            background: _cv('--bg'), primaryColor: _cv('--card'), primaryTextColor: _cv('--fg'),
+            primaryBorderColor: _cv('--line'), lineColor: _cv('--muted'),
+            secondaryColor: _cv('--card'), tertiaryColor: _cv('--bg'),
+            fontFamily: _cv('--font-ui')
+          }
+        });
+        resolve();
+      };
+      s.onerror = () => { _pvMermaidLoading = null; reject(new Error('mermaid.js failed to load')); };
+      document.head.appendChild(s);
+    });
+  }
+  return _pvMermaidLoading;
 }
 
 function esc(s) {
@@ -746,10 +762,10 @@ async function loadPreview(pv, path, nested) {
 }
 function renderMermaid(root) {
   const nodes = [...root.querySelectorAll('pre.mermaid')];
-  if (!nodes.length || !window.mermaid) return;
+  if (!nodes.length) return;
   // 構文エラー時、mermaid.run()はreject/catchでなく「Syntax error in text」のエラーSVGを
   // DOMへ直接書き込む（v10.9系の仕様）。描画後にerror-iconを検知してフォールバック表示に差し替える。
-  mermaid.run({ nodes }).then(() => {
+  loadPreviewMermaid().then(() => mermaid.run({ nodes })).then(() => {
     nodes.forEach(n => {
       if (n.querySelector('.error-icon')) n.innerHTML = '<span class="pv-err">図を表示できません</span>';
     });

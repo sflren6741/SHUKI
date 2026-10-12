@@ -36,7 +36,7 @@ PAGE = """<!DOCTYPE html>
   .spin { animation:spin 1.2s linear infinite; display:inline-block; }
   @keyframes spin { to { transform:rotate(360deg); } }
   .card { background:var(--card); border:1px solid var(--line); border-radius:16px;
-    padding:22px 20px; width:100%; transition:opacity .25s ease, transform .25s ease; }
+    padding:16px; width:100%; transition:opacity .25s ease, transform .25s ease; }
   .card.leaving { opacity:0; transform:translateX(30px); }
   .card.entering { opacity:0; transform:translateX(-16px); }
   .c-q { font-size:1.05rem; font-weight:bold; line-height:1.5; }
@@ -78,6 +78,7 @@ PAGE = """<!DOCTYPE html>
   .c-src { text-decoration:none; opacity:.6; font-size:.8rem; display:inline-flex; margin-left:6px; }
   .bulk-status { min-height:1.2em; margin:0 0 10px; color:var(--muted); font-size:.76rem; }
   .hbtn:disabled { opacity:.45; cursor:not-allowed; }
+  @media (max-width:700px) { .card { padding:12px; } }
   @media (max-width:360px) { .c-datetime-box { grid-template-columns:1fr; } }
 """ + dashboard_ui.RESPONSIVE_CSS + """
 </style>

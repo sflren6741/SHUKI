@@ -108,16 +108,23 @@ _usage_cache = {}  # {config_dir_str: {"ts": epoch, "data": dict|None}}
 _usage_lock = threading.Lock()
 
 
+class _UsageCredentialsError(RuntimeError):
+    """Local credential failure: no provider request or cooldown was consumed."""
+
+
 def _fetch_usage_raw(config_dir):
     """1アカウント分の oauth/usage 生レスポンス（キャッシュなし・失敗時は例外）。"""
-    creds = json.loads((Path(config_dir) / ".credentials.json").read_text(encoding="utf-8"))
+    try:
+        creds = json.loads((Path(config_dir) / ".credentials.json").read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        raise _UsageCredentialsError(t("このアカウントのClaude Codeに再ログインしてください（認証情報がありません）")) from e
     oauth = creds.get("claudeAiOauth") or {}
     token = oauth.get("accessToken")
     if not token:
-        raise RuntimeError(t("認証情報に accessToken がありません"))
+        raise _UsageCredentialsError(t("このアカウントのClaude Codeに再ログインしてください（認証情報がありません）"))
     expires_at = oauth.get("expiresAt")
     if expires_at and expires_at / 1000 < time.time():
-        raise RuntimeError(t("OAuthトークンが期限切れです（Claude Codeを一度起動すると更新されます）"))
+        raise _UsageCredentialsError(t("OAuthトークンが期限切れです（Claude Codeを一度起動すると更新されます）"))
     req = urllib.request.Request(USAGE_URL, headers={
         "Authorization": f"Bearer {token}", "anthropic-beta": "oauth-2025-04-20",
         "Content-Type": "application/json", "User-Agent": "dashboard-usage/1.0",
@@ -130,24 +137,28 @@ def usage(config_dir, force=False):
     """Usage cached for five minutes; manual checks may refresh after one minute.
 
     Failures retain the last values with an error/stale marker and are also cached.
+    Manual checks re-read missing/expired credentials immediately; no provider call
+    occurred for those failures. Provider attempts retain their one-minute cooldown.
     Each check makes only one provider request; fetched_at is the last successful fetch.
     """
     key = str(config_dir)
     with _usage_lock:
         cache = _usage_cache.setdefault(key, {"ts": 0, "data": None})
         cooldown = USAGE_REFRESH_MIN if force else USAGE_TTL
-        if cache["data"] is not None and time.time() - cache["ts"] < cooldown:
+        local_retry = force and cache.get("local_error", False)
+        if not local_retry and cache["data"] is not None and time.time() - cache["ts"] < cooldown:
             return cache["data"]
         try:
             data = dict(_fetch_usage_raw(config_dir), fetched_at=time.time())
-            cache.update(ts=time.time(), data=data)
+            cache.update(ts=time.time(), data=data, local_error=False)
             return data
         except Exception as e:
             error_message = str(e)
+            local_error = isinstance(e, _UsageCredentialsError)
         data = dict(cache["data"] or {}, error=error_message)
         if data.get("fetched_at"):
             data["stale"] = True
-        cache.update(ts=time.time(), data=data)
+        cache.update(ts=time.time(), data=data, local_error=local_error)
         return data
 
 

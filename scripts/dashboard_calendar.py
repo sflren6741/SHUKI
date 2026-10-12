@@ -6,8 +6,8 @@ dashboard_calendar.py — 📅 カレンダーページ（dashboard_server.py �
 Schedule / Results share a monthly calendar and selection. Results reuse the activity
 collector and load without Google Calendar. Legacy scheduling tools remain available.
 
-Google Calendar（primary）の予定を、開くたびに API を直接呼んで表示する（スナップショット
-ファイルは経由しない・常に最新）。今日/今週の一覧に加え、月グリッド表示にも対応する。
+Google Calendar（primary）は最終表示の予定をブラウザから先に表示し、開くたびに API で更新する。
+メモや提案はブラウザのスナップショットに保存しない。今日/今週の一覧と月グリッドに対応する。
 各予定にはその場でメモを書け、保存先は既存の memo キュー（`99_System/ui-queue/memo_YYYY-MM-DD.json`）
 を再利用する。`source: calendar` と `calendar_event_id` / `calendar_summary` / `calendar_start` を付け、
 日記・自由記述と同じ `processing: ai|record` の二択・同じ回収便（orchestrator.md §📝メモの回収）で仕分ける。
@@ -46,9 +46,12 @@ PAGE = """<!DOCTYPE html>
   .cal-intro h2 { margin-top:8px; font-size:1.12rem; line-height:1.4; }
   .cal-intro p { margin-top:5px; color:var(--muted); font-size:.8rem; line-height:1.6; }
   .cal-range { display:flex; gap:8px; margin-bottom:14px; }
-  .cal-range button { border:1px solid var(--line); border-radius:999px; padding:7px 16px;
+  /* §6.2: range chips are S size; vertical hit expansion does not collide in the shared row. */
+  .cal-range button { position:relative; box-sizing:border-box; height:32px; min-height:32px;
+    border:1px solid var(--line); border-radius:999px; padding:0 12px;
     background:var(--card); color:var(--fg); font:inherit; font-size:.82rem; font-weight:700;
-    cursor:pointer; min-height:44px; }
+    cursor:pointer; }
+  .cal-range button::before { content:''; position:absolute; inset:-7px 0; }
   .cal-range button.active { background:var(--accent); color:var(--bg); border-color:var(--accent); }
 
   /* ── 今日/今週：予定の縦リスト ── */
@@ -62,7 +65,7 @@ PAGE = """<!DOCTYPE html>
   .cal-meeting svg { color:var(--accent); flex:none; }
   .cal-meeting:hover { border-color:var(--accent); }
   .cal-meeting-items { color:var(--muted); font-size:.88rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .cal-event { background:var(--card); border:1px solid var(--line); border-radius:11px; padding:11px 13px; }
+  .cal-event { background:var(--card); border:1px solid var(--line); border-radius:11px; padding:10px 12px; }
   .cal-event-head { display:flex; align-items:baseline; gap:9px; cursor:pointer; }
   .cal-event-time { color:var(--accent); font-size:.78rem; font-weight:800; font-variant-numeric:tabular-nums;
     flex-shrink:0; min-width:3.6em; }
@@ -82,13 +85,21 @@ PAGE = """<!DOCTYPE html>
   .cal-event-form textarea { width:100%; min-height:5.5em; resize:vertical; background:var(--bg);
     color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:9px 11px; font:inherit;
     font-size:.85rem; line-height:1.6; }
-  .cal-event-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
-  .cal-event-toggle { background:none; border:1px solid var(--line); border-radius:999px;
-    padding:5px 13px; min-height:44px; color:var(--muted); font:inherit; font-size:.74rem; cursor:pointer; }
+  .cal-event-actions { display:flex; align-items:center; column-gap:8px; row-gap:14px; flex-wrap:wrap; }
+  /* §6.2: event helpers are compact S controls; keep adjacent targets separate horizontally. */
+  .cal-event-toggle { position:relative; box-sizing:border-box; height:32px; min-height:32px;
+    display:inline-flex; align-items:center; background:none; border:1px solid var(--line); border-radius:999px;
+    padding:0 10px; color:var(--muted); font:inherit; font-size:.74rem; cursor:pointer; }
+  .cal-event-toggle::before { content:''; position:absolute; inset:-7px 0; }
   .cal-event-toggle:hover { color:var(--fg); }
-  .cal-action { display:inline-flex; align-items:center; justify-content:center; gap:5px;
-    border:1px solid var(--line); border-radius:999px; padding:7px 15px; min-height:44px;
-    font:inherit; font-size:.78rem; font-weight:800; cursor:pointer; }
+  /* §6.2: compact inline actions are S size; the transparent vertical extension keeps a 44px hit area. */
+  .cal-action { position:relative; box-sizing:border-box; display:inline-flex; align-items:center; justify-content:center; gap:5px;
+    height:32px; min-height:32px; border:1px solid var(--line); border-radius:999px; padding:0 10px;
+    font:inherit; font-size:.78rem; font-weight:800; cursor:pointer; white-space:nowrap; }
+  .cal-action::before { content:''; position:absolute; inset:-7px 0; }
+  /* The create action is the primary control in its modal, so it uses M size. */
+  .cal-modal-actions .cal-action { height:40px; min-height:40px; padding:0 16px; }
+  .cal-modal-actions .cal-action::before { inset:-3px -1px; }
   .cal-action:disabled { opacity:.55; cursor:default; }
   .cal-record { background:var(--card); color:var(--fg); }
   .cal-ai { background:var(--accent); color:var(--bg); border-color:var(--accent); }
@@ -108,14 +119,17 @@ PAGE = """<!DOCTYPE html>
 
   /* ── 今月：グリッド。定規で引いた表ではなく、丸みのある「タイル」の集まりにする ── */
   .cal-month-nav { display:none; align-items:center; gap:14px; margin-bottom:14px; }
-  .cal-month-nav button { border:1px solid var(--line); background:var(--card); color:var(--fg);
-    border-radius:999px; width:44px; height:44px; font-size:1rem; cursor:pointer; }
+  .cal-month-nav button { position:relative; box-sizing:border-box; border:1px solid var(--line);
+    background:var(--card); color:var(--fg); border-radius:999px; width:32px; height:32px;
+    min-height:32px; font-size:1rem; cursor:pointer; }
+  .cal-month-nav button::before { content:''; position:absolute; inset:-7px; }
   .cal-month-nav button:hover { border-color:var(--accent); color:var(--accent); }
   .cal-month-label { font-weight:800; font-size:1rem; letter-spacing:.01em; }
   .cal-month-today { margin-left:auto; border:1px solid var(--line); border-radius:999px;
     padding:5px 14px; background:var(--card); color:var(--muted); font:inherit; font-size:.74rem;
     cursor:pointer; }
-  .cal-month-nav .cal-month-today { width:auto; white-space:nowrap; font-size:.74rem; }
+  .cal-month-nav .cal-month-today { width:auto; height:32px; min-height:32px; padding:0 10px;
+    white-space:nowrap; font-size:.74rem; }
   .cal-grid { display:none; grid-template-columns:repeat(7,minmax(0,1fr)); gap:7px; margin-bottom:6px; }
   .cal-grid-head { text-align:center; color:var(--muted); font-size:.68rem; font-weight:800;
     letter-spacing:.04em; padding-bottom:2px; }
@@ -139,8 +153,9 @@ PAGE = """<!DOCTYPE html>
   .cal-page [hidden], #cal-fab[hidden], #cal-tooltip[hidden] { display:none !important; }
   .cal-view-tabs { display:flex; gap:4px; padding:4px; border:1px solid var(--line);
     border-radius:12px; background:var(--card); margin-bottom:14px; }
-  .cal-view-tabs button { flex:1; min-height:44px; border:0; border-radius:8px;
+  .cal-view-tabs button { position:relative; box-sizing:border-box; flex:1; height:32px; min-height:32px; border:0; border-radius:8px;
     background:transparent; color:var(--muted); font:inherit; font-weight:700; cursor:pointer; }
+  .cal-view-tabs button::before { content:''; position:absolute; inset:-7px 0; }
   .cal-view-tabs button[aria-selected=true] { background:color-mix(in srgb, var(--accent) 12%, var(--card)); color:var(--fg); }
   .cal-results-controls { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin-bottom:12px; }
   .cal-results-controls label { display:flex; align-items:center; gap:7px; color:var(--muted); font-size:.78rem; }
@@ -203,10 +218,11 @@ PAGE = """<!DOCTYPE html>
      z-index:1000〜1300）の「一等地」で、ユーザーの実機で＋ボタンがドックの下に完全に隠れて見えなく
      なっていた（2026-09-26 ユーザーの指摘で発覚）。dashboard_chat.py の既存ルール「同じ右下の
      一等地は一つしか使わない」に倣い、競合しない左下へ動かす。 */
-  .cal-fab { position:fixed; left:20px; bottom:20px; width:54px; height:54px; border-radius:50%;
-    background:var(--accent); color:var(--bg); border:none; font-size:1.7rem; font-weight:700;
+  .cal-fab { position:fixed; left:20px; bottom:20px; width:40px; height:40px; box-sizing:border-box;
+    border-radius:50%; background:var(--accent); color:var(--bg); border:none; font-size:1.3rem; font-weight:700;
     line-height:1; cursor:pointer; box-shadow:0 10px 24px color-mix(in srgb, var(--accent) 45%, transparent);
     z-index:60; display:flex; align-items:center; justify-content:center; }
+  .cal-fab::before { content:''; position:absolute; inset:-3px; }
   .cal-fab:hover { transform:scale(1.05); }
   .cal-modal-backdrop { position:fixed; inset:0; background:color-mix(in srgb, black 55%, transparent);
     display:none; align-items:center; justify-content:center; z-index:1400; padding:16px; }
@@ -232,7 +248,7 @@ PAGE = """<!DOCTYPE html>
     .cal-grid { gap:4px; }
     .cal-cell { min-height:58px; border-radius:8px; padding:4px; gap:3px; }
     .cal-cell-daynum { font-size:.72rem; width:17px; height:17px; }
-    .cal-fab { left:14px; bottom:78px; width:50px; height:50px; }
+    .cal-fab { left:14px; bottom:78px; width:40px; height:40px; }
   }
   @media (max-width:360px) { main.cal-page { padding-left:0; padding-right:0; }
     .cal-grid { gap:2px; } .cal-month-nav { gap:6px; } .cal-month-label { font-size:.86rem; }
@@ -273,6 +289,7 @@ PAGE = """<!DOCTYPE html>
     <button type="button" class="cal-month-today" data-month-nav="0">今月へ</button>
   </div>
   <section id="cal-english-routine" class="en-routine" aria-label="IELTS study routine"></section>
+  <p id="cal-refresh-status" class="cal-result-help" role="status" hidden></p>
   <div id="cal-days" class="cal-days"><p class="cal-empty">読み込み中…</p></div>
   <div id="cal-month-grid" class="cal-grid"></div>
   <div id="cal-day-detail" class="cal-day-detail" aria-live="polite"></div>
@@ -321,6 +338,7 @@ PAGE = """<!DOCTYPE html>
   const resultHelp = document.getElementById('cal-result-help');
   const resultTable = document.getElementById('cal-result-table');
   const tooltip = document.getElementById('cal-tooltip');
+  const refreshStatus = document.getElementById('cal-refresh-status');
   const params = new URLSearchParams(location.search);
   let currentView = params.get('view') === 'results' ? 'results' : 'schedule';
   let currentRange = ['today', 'week'].includes(params.get('range')) ? params.get('range') : 'month';
@@ -357,6 +375,62 @@ PAGE = """<!DOCTYPE html>
     turn:'User messages to Claude Code and Codex that day. Scheduled runs, tool results and system injections are excluded. Project filter does not apply.'
   };
   const NO_ENTRY_METRICS = ['session', 'turn'];  // counted from transcripts, not vault files: no drill-down list, no project filter
+
+  const SNAPSHOT_KEY = 'shuki-calendar-last-seen-v1';
+  let snapshots = {};
+  try {
+    const stored = JSON.parse(localStorage.getItem(SNAPSHOT_KEY) || '{}');
+    if (stored && typeof stored === 'object' && !Array.isArray(stored)) snapshots = stored;
+  } catch (_) {}
+  function snapshotKey(range, anchor) {
+    const serverToday = new Date().toLocaleDateString('sv-SE', {timeZone:'Asia/Tokyo'});
+    return (LANG_EN ? 'en:' : 'ja:') + range + ':' + (range === 'month' ? anchor : serverToday);
+  }
+  function readSnapshot(key, month) {
+    const saved = snapshots[key];
+    if (!saved || !Number.isFinite(saved.seenAt) || !saved.data) return null;
+    const groups = month ? saved.data.weeks : [saved.data.days];
+    if (!Array.isArray(groups) || !groups.length || !groups.every(group => Array.isArray(group)
+        && group.every(day => day && Array.isArray(day.events) && day.events.every(ev => ev && typeof ev === 'object')))) return null;
+    if (month && (!groups.flat().some(day => day.in_month) || typeof saved.data.anchor !== 'string')) return null;
+    if (month) groups.flat().forEach(day => { day.is_today = day.date === todayIso(); });
+    return saved;
+  }
+  function saveSnapshot(key, data) {
+    // Keep event display fields only: never persist vault memos, suggestions or Results.
+    const cleanDay = day => ({date: day.date, day_num: day.day_num, label: day.label,
+      in_month: day.in_month, is_today: day.is_today, suggestions: [], meetings: [],
+      events: day.events.map(ev => ({id: ev.id, summary: ev.summary, location: ev.location,
+        time_label: ev.time_label, start: ev.start, notes: []}))});
+    const clean = data.weeks ? {anchor: data.anchor, month_label: data.month_label,
+      weeks: data.weeks.map(week => week.map(cleanDay))} : {days: data.days.map(cleanDay)};
+    snapshots[key] = {seenAt: Date.now(), data: clean};
+    snapshots = Object.fromEntries(Object.entries(snapshots).filter(([,saved]) => saved && Number.isFinite(saved.seenAt))
+      .sort((a,b) => b[1].seenAt - a[1].seenAt).slice(0, 8));
+    try { localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(snapshots)); } catch (_) {}
+  }
+  function refreshMessage(saved, error) {
+    refreshStatus.hidden = !saved;
+    refreshStatus.innerHTML = !saved ? '' : 'Last seen ' + escHtml(new Date(saved.seenAt).toLocaleString())
+      + (error ? ' · Could not refresh from Google (' + escHtml(error) + '). <button type="button" data-refresh-retry>Retry</button>'
+        : ' · Refreshing from Google…');
+  }
+  refreshStatus.addEventListener('click', event => {
+    if (event.target.closest('[data-refresh-retry]')) load(currentRange);
+  });
+  function replaceSchedule(render) {
+    const drafts = new Map(Array.from(document.querySelectorAll('.cal-event')).map(event => [event.dataset.eventId, {
+      text: event.querySelector('[data-text]').value,
+      open: event.querySelector('[data-form]').classList.contains('open')
+    }]));
+    render();
+    document.querySelectorAll('.cal-event').forEach(event => {
+      const draft = drafts.get(event.dataset.eventId);
+      if (!draft) return;
+      event.querySelector('[data-text]').value = draft.text;
+      if (draft.open) event.querySelector('[data-form]').classList.add('open');
+    });
+  }
 
   function escHtml(s) {
     return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -513,23 +587,31 @@ PAGE = """<!DOCTYPE html>
     if (currentView === 'schedule' && window.EnglishRoutine) EnglishRoutine.mount(document.getElementById('cal-english-routine'), range !== 'today');
     if (currentView === 'results' || range === 'month') { await loadMonth(currentAnchor); return; }
     const revision = ++loadRevision;
-    daysBox.innerHTML = '<p class="cal-empty">読み込み中…</p>';
+    const key = snapshotKey(range);
+    const saved = readSnapshot(key, false);
+    refreshMessage(saved);
+    daysBox.innerHTML = saved ? saved.data.days.map(dayListHtml).join('') : '<p class="cal-empty">読み込み中…</p>';
     try {
-      const response = await fetch('/calendar/data?range=' + encodeURIComponent(range));
+      const response = await fetch('/calendar/data?range=' + encodeURIComponent(range), {cache:'no-store'});
       const data = await response.json();
       if (revision !== loadRevision) return;
       if (!response.ok || data.error) {
+        if (saved) { refreshMessage(saved, data.error || ('HTTP ' + response.status)); return; }
         daysBox.innerHTML = '<p class="cal-error">予定を取得できませんでした（' + escHtml(data.error || ('HTTP ' + response.status)) + '）。'
           + ' Google カレンダーへの接続を確認してください。</p>';
         return;
       }
-      if (!Array.isArray(data.days) || !data.days.length) {
+      if (!Array.isArray(data.days)) throw new Error('Invalid calendar response');
+      saveSnapshot(key, data);
+      refreshMessage(null);
+      if (!data.days.length) {
         daysBox.innerHTML = '<p class="cal-empty">予定はありません。</p>';
         return;
       }
-      daysBox.innerHTML = data.days.map(dayListHtml).join('');
-    } catch (_) {
+      replaceSchedule(() => { daysBox.innerHTML = data.days.map(dayListHtml).join(''); });
+    } catch (err) {
       if (revision !== loadRevision) return;
+      if (saved) { refreshMessage(saved, String(err.message)); return; }
       daysBox.innerHTML = '<p class="cal-error">予定を取得できませんでした（通信エラー）。</p>';
     }
   }
@@ -722,18 +804,44 @@ PAGE = """<!DOCTYPE html>
     const revision = ++loadRevision;
     const view = currentView;
     currentAnchor = anchor || todayIso().slice(0, 7);
+    const key = snapshotKey('month', currentAnchor);
+    const saved = view === 'schedule' ? readSnapshot(key, true) : null;
+    refreshMessage(saved);
     monthGrid.setAttribute('aria-busy', 'true');
     resultControls.inert = true;
     tooltip.hidden = true;
-    if (!monthData) monthGrid.innerHTML = '<p class="cal-empty">Loading…</p>';
+    if (saved) {
+      applyMonth(saved.data, view);
+      monthGrid.setAttribute('aria-busy', 'false');
+    } else if (!monthData) monthGrid.innerHTML = '<p class="cal-empty">Loading…</p>';
     try {
       const endpoint = view === 'results' ? '/calendar/results?' : '/calendar/data?range=month&';
-      const response = await fetch(endpoint + 'anchor=' + encodeURIComponent(currentAnchor));
+      const response = await fetch(endpoint + 'anchor=' + encodeURIComponent(currentAnchor), {cache:'no-store'});
       const data = await response.json();
       if (revision !== loadRevision) return;
       if (!response.ok || data.error || !data.weeks) {
         throw new Error(data.error || ('HTTP ' + response.status));
       }
+      if (view === 'schedule') saveSnapshot(key, data);
+      replaceSchedule(() => applyMonth(data, view));
+      refreshMessage(null);
+    } catch (err) {
+      if (revision !== loadRevision) return;
+      if (saved) { refreshMessage(saved, String(err.message)); return; }
+      monthData = null;
+      monthGrid.innerHTML = '';
+      resultSummary.textContent = ''; resultHelp.textContent = '';
+      document.getElementById('cal-result-table-body').textContent = '';
+      dayDetail.innerHTML = '<p class="cal-error">Could not load ' + (view === 'results' ? 'results' : 'schedule')
+        + ' (' + escHtml(String(err.message)) + '). <button type="button" data-retry>Retry</button></p>';
+    } finally {
+      if (revision === loadRevision) {
+        monthGrid.setAttribute('aria-busy', 'false'); resultControls.inert = false;
+      }
+    }
+  }
+
+  function applyMonth(data, view) {
       monthData = data;
       currentAnchor = data.anchor;
       const days = allDays();
@@ -753,19 +861,6 @@ PAGE = """<!DOCTYPE html>
       }
       renderMonthGrid();
       syncUrl();
-    } catch (err) {
-      if (revision !== loadRevision) return;
-      monthData = null;
-      monthGrid.innerHTML = '';
-      resultSummary.textContent = ''; resultHelp.textContent = '';
-      document.getElementById('cal-result-table-body').textContent = '';
-      dayDetail.innerHTML = '<p class="cal-error">Could not load ' + (view === 'results' ? 'results' : 'schedule')
-        + ' (' + escHtml(String(err.message)) + '). <button type="button" data-retry>Retry</button></p>';
-    } finally {
-      if (revision === loadRevision) {
-        monthGrid.setAttribute('aria-busy', 'false'); resultControls.inert = false;
-      }
-    }
   }
 
   rangeButtons.forEach(b => b.addEventListener('click', () => {

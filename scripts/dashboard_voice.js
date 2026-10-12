@@ -29,17 +29,55 @@ class VoiceConversation {
     this.practiceSendReady = false;
   }
   state(text) { this.ui.state(text); }
+  // A dropped connection (server restart, phone network switch) surfaces as a bare
+  // "Failed to fetch". Mark it so callers can retry or keep the session alive.
+  async fetchNet(url, options = {}) {
+    try { return await fetch(url, options); }
+    catch (error) {
+      if (error.name === 'AbortError') throw error;
+      const network = new Error('network'); network.network = true; throw network;
+    }
+  }
   async request(url, options = {}, timeout = 95000, independent = false) {
     const ctl = new AbortController();
     if (!independent) this.controllers.add(ctl);
-    const timer = setTimeout(() => ctl.abort(), timeout);
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; ctl.abort(); }, timeout);
     try {
-      const res = await fetch(url, {...options, signal: ctl.signal});
+      const res = await this.fetchNet(url, {...options, signal: ctl.signal});
       const data = await res.json();
       if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
       return data;
+    } catch (error) {
+      if (timedOut) { const network = new Error('timeout'); network.network = true; throw network; }
+      throw error;
     } finally { clearTimeout(timer); this.controllers.delete(ctl); }
   }
+  // Recoverable: the connection dropped, or the server restarted and forgot the job.
+  recoverable(error) { return !!error?.network || error?.message === 'unknown job'; }
+  connectionMessage(error, language = this.language) {
+    if (error?.message === 'unknown job') return language === 'ja'
+      ? 'SHUKIが再起動したため、今の返答が失われました。もう一度話してください。'
+      : 'SHUKI restarted and lost that reply. Please say it again.';
+    return language === 'ja'
+      ? 'SHUKIに接続できませんでした。聞き取りは続けています。もう一度話してください。'
+      : 'Couldn’t reach SHUKI. I’m still listening — please say that again.';
+  }
+  // Muting keeps the session (replies still arrive and play) but stops listening.
+  // Muting mid-sentence ends the utterance, so what was already said is sent.
+  setMuted(on) {
+    if (!this.active) return;
+    this.muted = !!on;
+    this.stream?.getAudioTracks().forEach(track => { track.enabled = !this.muted; });
+    this.loudSince = 0;
+    if (this.muted && this.speaking) {
+      this.speaking = false;
+      this.lastSpeech = performance.now() - this.ui.pause();
+      if (this.recorder?.state === 'recording') this.recorder.stop();
+    }
+    this.state(this.busy ? 'Thinking — you can keep talking' : this.transcribing ? 'Transcribing…' : 'Listening');
+  }
+  toggleMute() { this.setMuted(!this.muted); }
   async start(session = '') {
     // Voice and the typed dock share one conversation: an existing session id is
     // carried in so switching input mode never starts a new thread.
@@ -50,6 +88,7 @@ class VoiceConversation {
     const epoch = ++this.epoch;
     this.language = 'en';
     this.pending = ''; this.session = session || ''; this.busy = false; this.job = ''; this.stopping = false;
+    this.muted = false;
     this.lookupApproval = null;
     this.transcribing = 0; this.sttQueue = Promise.resolve();
     this.ui.active(true);
@@ -101,12 +140,15 @@ class VoiceConversation {
     const now = performance.now();
     // A rolling lower percentile follows steady room noise without following
     // individual loud peaks. Keep the user's selected pause unchanged.
-    this.noiseSamples.push(rms);
+    // Muted silence would drag the floor down, so it is not sampled.
+    if (!this.muted) this.noiseSamples.push(rms);
     if (this.noiseSamples.length > 75) this.noiseSamples.shift();
     const levels = [...this.noiseSamples].sort((a, b) => a - b);
-    const floor = levels[Math.floor((levels.length - 1) * 0.2)];
+    const floor = levels.length ? levels[Math.floor((levels.length - 1) * 0.2)] : 0;
     const threshold = Math.max(0.025, floor * 2.5);
-    if (rms > threshold) {
+    this.ui.level?.(this.muted ? 0 : Math.min(1, rms / (threshold * 2)));
+    if (this.muted) { this.loudSince = 0; }
+    else if (rms > threshold) {
       if (!this.loudSince) this.loudSince = now;
       if (now - this.loudSince >= 160) {
         this.lastSpeech = now; this.clipSpeech = true;
@@ -147,7 +189,7 @@ class VoiceConversation {
       this.stopping = true;
       // An exact ID is mandatory: never stop an unrelated dashboard job.
       this.request('/job-stop?id=' + encodeURIComponent(id), {}, 10000)
-        .catch(e => { if (this.active && epoch === this.epoch && e.message !== 'not running') this.fail(e); })
+        .catch(e => { if (this.active && epoch === this.epoch && e.message !== 'not running' && !this.recoverable(e)) this.fail(e); })
         .finally(() => { if (epoch === this.epoch) this.stopping = false; });
     }
   }
@@ -157,13 +199,27 @@ class VoiceConversation {
     this.sttQueue = this.sttQueue.then(async () => {
       if (!this.active || epoch !== this.epoch || revision !== this.languageRevision) return;
       const sttLanguage = language === 'ja' ? 'ja' : 'en';
-      const data = await this.request('/stt?language=' + sttLanguage, {method: 'POST',
-        headers: {'Content-Type': blob.type}, body: blob});
+      let data;
+      for (let attempt = 0; ; attempt++) {  // Transcription is idempotent, so a dropped upload is retried.
+        try {
+          data = await this.request('/stt?language=' + sttLanguage, {method: 'POST',
+            headers: {'Content-Type': blob.type}, body: blob});
+          break;
+        } catch (error) {
+          if (!error.network || attempt >= 2 || !this.active || epoch !== this.epoch) throw error;
+          this.state('Connection dropped — retrying…');
+          await new Promise(resolve => setTimeout(resolve, 1500));
+        }
+      }
       if (!this.active || epoch !== this.epoch || revision !== this.languageRevision) return;
       const text = (data.text || '').trim();
       if (text) this.pending = [this.pending, text].filter(Boolean).join('\n');
       this.ui.draft(this.pending);
-    }).catch(e => { if (this.active && epoch === this.epoch && revision === this.languageRevision) this.fail(e); })
+    }).catch(e => {
+      if (!this.active || epoch !== this.epoch || revision !== this.languageRevision) return;
+      if (this.recoverable(e)) this.state(this.connectionMessage(e));  // Keep listening; only this clip is lost.
+      else this.fail(e);
+    })
       .finally(() => {
         if (epoch !== this.epoch) return;
         this.transcribing--;
@@ -427,7 +483,7 @@ class VoiceConversation {
       const discussion = this.proposal
         ? text + '\n\nCurrent displayed proposal (reference only; retain unless the user requests a scope change):\n' + this.proposal.summary
         : text;
-      const res = await fetch('/exec?voice=1&text=' + encodeURIComponent(discussion)
+      const res = await this.fetchNet('/exec?voice=1&text=' + encodeURIComponent(discussion)
         + '&session=' + encodeURIComponent(this.session) + '&label=Voice%20conversation'
         + '&voice_lang=' + encodeURIComponent(language)
         + '&lookup_source=' + encodeURIComponent(lookupSource)
@@ -446,8 +502,19 @@ class VoiceConversation {
       const deadline = performance.now() + 180000;
       const waitingSince = performance.now();
       let waitingNotice = false;
+      let dropped = 0;
       while (this.active && epoch === this.epoch) {
-        const data = await this.request('/job?id=' + encodeURIComponent(id), {}, 10000);
+        let data;
+        try {
+          data = await this.request('/job?id=' + encodeURIComponent(id), {}, 10000);
+          dropped = 0;
+        } catch (error) {
+          // Ride out a short outage (a dashboard restart takes ~10 s); the job keeps running server-side.
+          if (!error.network || ++dropped > 10 || performance.now() > deadline) throw error;
+          if (turn === this.turn) this.state('Connection dropped — reconnecting…');
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          continue;
+        }
         if (!this.active || epoch !== this.epoch) return;
         this.ui.model?.(data.model);
         if (data.status === 'running') {
@@ -519,6 +586,11 @@ class VoiceConversation {
           const message = language === 'ja'
             ? 'この会話では別の返答を生成中です。終了後にもう一度話してください。'
             : 'A reply is already running in this conversation. Wait for it to finish, then send your message again.';
+          this.ui.render(reply, message);
+          this.ui.speak?.(message, language);
+        } else if (this.recoverable(error)) {
+          // The session stays open: one lost turn should not end the conversation.
+          const message = this.connectionMessage(error, language);
           this.ui.render(reply, message);
           this.ui.speak?.(message, language);
         } else this.fail(error);
@@ -642,9 +714,15 @@ class VoiceConversation {
       return false;
     }
   }
-  fail(error) { this.end(); this.state(String(error.message || error)); }
+  fail(error) {
+    this.end();
+    const message = this.recoverable(error) ? 'Couldn’t reach SHUKI. Tap the mic to try again.'
+      : String(error.message || error);
+    if (this.ui.error) this.ui.error(message); else this.state(message);
+  }
   end() {
     this.practiceSendReady = false;
+    this.muted = false;
     this.notice = '';
     this.lookupApproval = null;
     this.active = false; this.epoch++; this.turn++;

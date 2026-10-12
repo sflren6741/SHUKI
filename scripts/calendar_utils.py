@@ -4,6 +4,7 @@ Google Calendar ユーティリティ — 共有ライブラリ
 
   from calendar_utils import get_calendar_service, get_events, create_allday_event
 """
+import threading
 from datetime import datetime, date, timezone, timedelta
 from pathlib import Path
 
@@ -45,17 +46,37 @@ def get_calendar_service(*, authorize=False):
     return build("calendar", "v3", credentials=creds)
 
 
+# 読み取り用クライアントの使い回し（2026-10-10）。予定そのものは毎回APIから取る（キャッシュしない
+# ＝開くたび最新、は従来どおり）。毎回 build() すると TLS の準備と新規接続で1回 ~560ms、使い回すと
+# ~280ms（実測）。httplib2 はスレッド安全でないのでロックで直列化し、トークンファイルが
+# 変わった時（再接続）と失敗した時は作り直す。
+_READ_SERVICE = {"stamp": None, "service": None}
+_READ_LOCK = threading.Lock()
+
+
 def get_events(time_min: datetime, time_max: datetime, max_results: int = 100) -> list[dict]:
     """指定期間のイベントを取得して返す（開始時刻順）。"""
-    service = get_calendar_service()
-    result = service.events().list(
-        calendarId="primary",
-        timeMin=time_min.isoformat(),
-        timeMax=time_max.isoformat(),
-        maxResults=max_results,
-        singleEvents=True,
-        orderBy="startTime",
-    ).execute()
+    with _READ_LOCK:
+        try:
+            st = CALENDAR_TOKEN.stat()
+            stamp = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            stamp = None
+        if _READ_SERVICE["service"] is None or _READ_SERVICE["stamp"] != stamp:
+            _READ_SERVICE["service"] = get_calendar_service()
+            _READ_SERVICE["stamp"] = stamp
+        try:
+            result = _READ_SERVICE["service"].events().list(
+                calendarId="primary",
+                timeMin=time_min.isoformat(),
+                timeMax=time_max.isoformat(),
+                maxResults=max_results,
+                singleEvents=True,
+                orderBy="startTime",
+            ).execute()
+        except Exception:
+            _READ_SERVICE["service"] = None
+            raise
     return result.get("items", [])
 
 

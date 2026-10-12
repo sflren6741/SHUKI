@@ -310,22 +310,27 @@ def settings_html():
     （設定ページ下部の「保存して反映」とは独立。webpush・MCP 欄と同じ流儀）。"""
     guides = load_state().get("guides", True)
     tx = lambda s: t(s, ctx="tutorial")  # noqa: E731
+    # 2026-10-11: 設定ページの行レイアウト（.set-card/.set-row/.sw は dashboard_server.SETTINGS_CSS）に合わせた。
+    # 以前は「+」で開く Details の中にあり、スイッチの現在値が閉じたままでは見えなかった。
+    guide_label = tx("画面を初めて開いた時にガイドを表示する")
     return (
-        '<details class="card settings-group" id="tutorial-settings">'
-        f'<summary>{tx("チュートリアル")}</summary><div class="settings-body">'
-        f'<p class="hint">{tx("基本操作のチュートリアルと、各画面を初めて開いた時の短いガイドです。")}</p>'
-        '<p><button type="button" class="hbtn" id="tut-replay" '
+        '<section class="card set-card" id="tutorial-settings">'
+        f'<h2 class="set-h">{tx("チュートリアル")}</h2>'
+        '<label class="set-row" for="tut-guides"><div class="set-text">'
+        f'<span class="set-label">{guide_label}</span></div><span class="set-ctl">'
+        f'<input type="checkbox" role="switch" class="sw" id="tut-guides"{" checked" if guides else ""} '
+        f'aria-label="{guide_label}" '
+        'onchange="window.ShukiTutorial &amp;&amp; ShukiTutorial.settings(\'guides\', this)"></span></label>'
+        '<div class="set-row"><div class="set-text">'
+        f'<small>{tx("基本操作のチュートリアルと、各画面を初めて開いた時の短いガイドです。")}</small></div>'
+        '<div class="set-ctl"><button type="button" class="pill" id="tut-replay" '
         'onclick="window.ShukiTutorial &amp;&amp; ShukiTutorial.settings(\'replay\', this)">'
-        f'{tx("基本操作をもう一度")}</button> '
-        '<button type="button" class="hbtn" id="tut-reset-guides" '
+        f'{tx("基本操作をもう一度")}</button>'
+        '<button type="button" class="pill" id="tut-reset-guides" '
         'onclick="window.ShukiTutorial &amp;&amp; ShukiTutorial.settings(\'reset\', this)">'
-        f'{tx("画面ガイドをもう一度表示")}</button></p>'
-        '<label class="ord-check" style="display:flex;margin-top:8px;">'
-        f'<input type="checkbox" id="tut-guides"{" checked" if guides else ""} '
-        'onchange="window.ShukiTutorial &amp;&amp; ShukiTutorial.settings(\'guides\', this)">'
-        f'<span>{tx("画面を初めて開いた時にガイドを表示する")}</span></label>'
-        '<p class="hint" id="tut-settings-msg" role="status" aria-live="polite"></p>'
-        '</div></details>')
+        f'{tx("画面ガイドをもう一度表示")}</button></div></div>'
+        '<p class="hint set-sub" id="tut-settings-msg" role="status" aria-live="polite"></p>'
+        '</section>')
 
 
 # 色はすべてトークン経由。暗幕だけは既存のオーバーレイ（.sb-overlay 等）と同じ黒の半透明。
