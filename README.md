@@ -1,16 +1,15 @@
 <div align="center">
 
-<img src="docs/assets/hero.svg" alt="SHUKI — Obsidian and Claude Code personal AI intranet" width="900">
+<img src="docs/assets/hero.svg" alt="SHUKI — Claude Code 個人用AIイントラネット" width="900">
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-brightgreen.svg)](LICENSE)
-[![Obsidian](https://img.shields.io/badge/Obsidian-7C3AED?logo=obsidian&logoColor=white)](https://obsidian.md/)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-D97757?logo=claude&logoColor=white)](https://claude.com/claude-code)
 
 [English](README.en.md)
 
 </div>
 
-SHUKI は、Obsidian のノートと AI による整理作業をつなぐ個人用のシステムです。メモやタスクを Markdown で保存し、Claude Code で追加・検索・整理します。ブラウザのダッシュボードでは、タスク、予定、ニュース、承認待ちの依頼を確認できます。
+SHUKI は、Markdown のノートと AI による整理作業をつなぐ個人用のシステムです。メモやタスクを Markdown で保存し、裏側の Claude Code で追加・検索・整理します。日常の操作はブラウザの SHUKI ダッシュボードから行います。タスク、予定、ニュース、承認待ちの依頼の確認に加え、AIチャットもダッシュボード上で使えます。
 
 <img src="docs/assets/shuki-demo.gif" alt="タスクボード、ニュース、決裁カード、AIチャットを操作するダッシュボードのデモ" width="900">
 
@@ -18,7 +17,7 @@ SHUKI は、Obsidian のノートと AI による整理作業をつなぐ個人�
 
 ## このリポジトリに含まれるもの
 
-- Obsidian vault のフォルダ構成、ノートのテンプレート、サンプルデータ
+- PARA構造のフォルダ構成、ノートのテンプレート、サンプルデータ（Markdownファイルのみ。ビューアは不要）
 - Claude Code のエージェント定義と、セットアップ・調査・週次レビューなどのワークフロー
 - AIチャット、タスクボード、カレンダー、ニュース、決裁カードを備えたローカルダッシュボード
 - フィード取得、ノートの構造チェック、定期実行用のスクリプト
@@ -27,7 +26,7 @@ SHUKI は、Obsidian のノートと AI による整理作業をつなぐ個人�
 
 ## 使い始める
 
-[Claude Code](https://claude.com/claude-code) と [Obsidian](https://obsidian.md/) をインストールしてから、リポジトリを取得します。Git を使わず ZIP でダウンロードすることもできます。
+[Claude Code](https://claude.com/claude-code) をインストールしてから、リポジトリを取得します。Claude Code には有料アカウント（Claude Pro か API）が必要です。Git を使わず ZIP でダウンロードすることもできます。
 
 ```sh
 git clone https://github.com/sflren6741/SHUKI my-vault
@@ -35,11 +34,11 @@ cd my-vault
 claude
 ```
 
-Claude Code で `/setup` を実行すると、自分のプロフィール、責任領域、パス設定などを対話で設定できます。Obsidian では `my-vault` を vault として開いてください。プラグインの有効化など、アプリ上で行う設定もあります。
+Claude Code で `/setup` を実行すると、自分のプロフィール、責任領域、パス設定などを対話で設定できます。
 
 インストールと設定の詳細は [セットアップガイド](docs/SETUP.md) にあります。論文の新着追跡とタスク管理に絞る場合は、[研究向けクイックスタート](docs/QUICKSTART-RESEARCH.md) を参照してください。
 
-### ダッシュボードを使う
+### ダッシュボードを使う（日常の操作はここから）
 
 Python 3.11 以降が必要です。`SHUKI_VAULT` に vault の絶対パスを設定し、リポジトリのルートで起動します。PowerShell の例：
 
@@ -48,9 +47,9 @@ $env:SHUKI_VAULT = (Get-Location).Path
 python scripts/dashboard_server.py
 ```
 
-ブラウザで <http://127.0.0.1:8765/> を開きます。コア機能は Python の標準ライブラリで動作します。AIチャットには選択した CLI の設定が、Google カレンダー連携には追加パッケージとアカウント接続が必要です。詳細は [scripts/README.md](scripts/README.md) にあります。
+ブラウザで <http://127.0.0.1:8765/> を開きます。起動には PyYAML（`pip install pyyaml`）が必要です。それ以外のコア機能は Python の標準ライブラリで動作します。AIチャットには選択した CLI の設定が、Google カレンダー連携には追加パッケージとアカウント接続が必要です。詳細は [scripts/README.md](scripts/README.md) にあります。
 
-ダッシュボードや定期実行は任意です。Obsidian と Claude Code だけで始め、必要になった機能を追加できます。定期実行を使う場合は [自動化ガイド](docs/AUTOMATION.md) を参照してください。
+ダッシュボードは裏側で Claude Code を呼び出すので、Claude Code のアカウントは必須ですが、日常の画面操作はダッシュボードだけで完結します。定期実行は任意です。使う場合は [自動化ガイド](docs/AUTOMATION.md) を参照してください。
 
 ## 日常の使い方
 
@@ -66,7 +65,7 @@ Claude Code に、保存・整理したい内容を伝えます。
 
 <sub>チャットでの操作例を描いた SVG。</sub>
 
-保存されたノートは Obsidian で読んだり、直接編集したりできます。関連するノートは wikilink でつなぎ、タスクの状態や期限はプロパティで管理します。`/next` は次に取り組むタスクの選定、`/weekly-review` は対話での週次レビューに使います。
+保存されたノートはダッシュボードのタスクボードやカレンダーで確認できます。ファイルとしても手元に残るので、エディタで直接編集もできます。関連するノートは wikilink でつなぎ、タスクの状態や期限はプロパティで管理します。`/next` は次に取り組むタスクの選定、`/weekly-review` は対話での週次レビューに使います。
 
 | ダッシュボードのページ | 用途 |
 |---|---|
@@ -77,7 +76,7 @@ Claude Code に、保存・整理したい内容を伝えます。
 
 ## 仕組み
 
-<img src="docs/assets/architecture.svg" alt="チャットとスケジューラからClaude Codeを通じてObsidian vaultを読み書きする構成図" width="900">
+<img src="docs/assets/architecture.svg" alt="チャットとスケジューラからClaude Codeを通じて vault を読み書きし、同じ vault を SHUKI ダッシュボードが操作する構成図" width="900">
 
 <sub>チャット、エージェント、ノートの関係。図中の定期実行は別途設定が必要です。</sub>
 
@@ -136,9 +135,8 @@ my-vault/
 |---|---|
 | [セットアップ](docs/SETUP.md) | インストールと初期設定 |
 | [研究向けクイックスタート](docs/QUICKSTART-RESEARCH.md) | 論文の新着追跡とタスク管理 |
-| [Obsidian の設定](docs/OBSIDIAN-SETUP.md) | プラグイン、プロパティ、リンク |
 | [エージェント](docs/AGENTS.md) | 役割の定義と追加方法 |
-| [モバイル同期](docs/MOBILE-SYNC.md) | Android と FolderSync での同期 |
+| [モバイル同期](docs/MOBILE-SYNC.md) | 外出先からダッシュボードに接続する |
 | [自動化](docs/AUTOMATION.md) | 定期実行の設定 |
 | [設計の考え方](docs/TIPS.md) | PARA、wikilink、概念ノート、担当範囲 |
 

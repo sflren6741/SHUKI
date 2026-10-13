@@ -20,6 +20,6 @@ date: 2026-01-15
 
 ## 🔗 関連タスク / Tasks
 ```base
-# Obsidian Bases: parent が このプロジェクトを指すタスクを集約
+# ベース: parent が このプロジェクトを指すタスクを集約
 # filters: parent.contains("<プロジェクト名>")
 ```

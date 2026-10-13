@@ -227,6 +227,7 @@ def bm25f_search(index, query_tokens, k=8):
     candidates = set()
     for tok in query_tokens:
         candidates |= set(postings.get(tok, {}).keys())
+    candidates &= doc_meta.keys()  # --area でdoc_metaだけ絞った時、postings側の他文書を外す
     if not candidates:
         return []
 

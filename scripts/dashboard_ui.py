@@ -331,6 +331,7 @@ def sidebar_panel_html():
             f'<div class="sb-head"><span>{t("メニュー", ctx="sidebar")}</span>'
             f'<button type="button" class="sb-close" onclick="shukiSidebarClose()" '
             f'title="{t("閉じる", ctx="sidebar")}">{dashboard_icons.ui_icon_svg("cross", 16)}</button></div>'
+            f'<div class="sb-body">'
             f'<nav class="sb-links">{"".join(links)}</nav>{extra}'
             f'<section class="sb-sessions" aria-label="Sessions">'
             f'<div class="sb-session-toolbar">'
@@ -340,7 +341,8 @@ def sidebar_panel_html():
             f'aria-controls="sb-session-tools" onclick="shukiSessionsOptions()">Options</button></div>'
             f'<div id="sb-session-tools" class="sb-session-tools" hidden>'
             f'<select id="sb-session-filter" class="sb-session-control" aria-label="Show sessions" onchange="shukiSessionsFilter()">'
-            f'<option value="unfinished">Not done</option><option value="waiting">Waiting</option>'
+            f'<option value="unfinished">Not done (open + waiting)</option>'
+            f'<option value="waiting">↳ Waiting only</option>'
             f'<option value="done">Done</option><option value="all">All</option></select>'
             f'<button id="sb-session-review" class="sb-session-control" type="button" onclick="shukiSessionsReview()">Review with AI</button></div>'
             f'<input id="sb-session-search" class="sb-session-control" type="search" aria-label="Search sessions" '
@@ -349,6 +351,7 @@ def sidebar_panel_html():
             f'<ul id="sb-hist" class="hist-list"><li class="muted empty">…</li></ul>'
             f'<button id="sb-session-more" class="sb-session-control" type="button" onclick="shukiSessionsMore()" hidden>Show more</button>'
             f'</section>'
+            f'</div>'
             f'</aside>{sidebar_js}')
     return shuki_i18n.tt_html(panel, ctx="sidebar")
 
@@ -776,7 +779,9 @@ RESPONSIVE_CSS = """
   /* position:fixed ＋ body直下への移設（shukiNavPop が行う）。absolute のままヘッダー内に
      置くと .hd-nav の overflow-x:auto にクリップされて一切見えない（2026-08-21 実測）。
      座標はボタンの実位置からJSが入れる＝ヘッダー高さやタブ幅を決め打ちしない。 */
-  .navpop { display:none; position:fixed; z-index:1200;
+  /* 対話ドック(#result)の z-index:1300 より上に置く。以前は 1200 でドックの裏に隠れて
+     押しても見えなかった（2026-10-13 報告）。 */
+  .navpop { display:none; position:fixed; z-index:1310;
     background:var(--card); border:1px solid var(--line); border-radius:10px; padding:5px;
     min-width:170px; box-shadow:0 10px 28px rgba(0,0,0,.38); }
   .navpop.on { display:block; }
@@ -873,16 +878,27 @@ RESPONSIVE_CSS = """
     position:relative; cursor:pointer; flex-shrink:0; }
   .sb-trigger:hover { color:var(--fg); border-color:var(--accent); }
   .sb-trigger .nav-badge { position:absolute; top:-4px; right:-4px; margin-left:0; }
-  .sb-overlay { display:none; position:fixed; inset:0; z-index:1300; background:rgba(0,0,0,.4); }
+  /* z-index は対話ドック(#result/#result-mini、1300)より上。以前は同じ1300台で、DOM順で
+     ドックが後に来るためオーバーレイより前面に出てしまい、ドック越しにタップしてもサイドバーが
+     閉じなかった（2026-10-13 報告）。オーバーレイを確実にドックより上に置き、ドックの上を
+     タップした時もオーバーレイのclickが拾って閉じるようにする。 */
+  .sb-overlay { display:none; position:fixed; inset:0; z-index:1320; background:rgba(0,0,0,.4); }
   .sb-overlay.on { display:block; }
   /* トリガー（ハンバーガー）がヘッダー右端（hd-extra）にあるので、パネルも右からスライドさせる
-     （開く場所とトリガーの位置を揃える・2026-09-26）。 */
-  .sb-panel { position:fixed; top:0; right:0; bottom:0; z-index:1301; width:min(300px, 84vw);
+     （開く場所とトリガーの位置を揃える・2026-09-26）。
+     overflow は持たない：ヘッダー(.sb-head)を常時表示のまま固定し、.sb-body だけがスクロール
+     する2段構成にする（2026-10-13。以前はパネル全体が1つのスクロール領域で、ヘッダーと
+     閉じるボタンがスクロールで隠れた）。 */
+  .sb-panel { position:fixed; top:0; right:0; bottom:0; z-index:1321; width:min(300px, 84vw);
     background:var(--card); border-left:1px solid var(--line); box-shadow:-6px 0 24px rgba(0,0,0,.3);
-    transform:translateX(100%); transition:transform .2s ease; padding:14px; overflow-y:auto;
+    transform:translateX(100%); transition:transform .2s ease; padding:14px; overflow:hidden;
     display:flex; flex-direction:column; gap:12px; }
   .sb-panel.on { transform:translateX(0); }
-  .sb-head { display:flex; align-items:center; justify-content:space-between; font-weight:bold; }
+  .sb-head { display:flex; align-items:center; justify-content:space-between; font-weight:bold;
+    flex-shrink:0; }
+  /* パネル本体のスクロール領域。flex:1 で「ヘッダーの下〜画面の一番下」まで使い切るので、
+     セッション一覧だけを小さい固定高さの箱に閉じ込めない（下記 #sb-hist 参照・2026-10-13）。 */
+  .sb-body { flex:1; min-height:0; overflow-y:auto; display:flex; flex-direction:column; gap:12px; }
   .sb-close { background:none; border:none; color:var(--muted); cursor:pointer; padding:4px;
     display:inline-flex; }
   .sb-close:hover { color:var(--fg); }
@@ -902,8 +918,11 @@ RESPONSIVE_CSS = """
   .sb-session-tools { display:flex; flex-direction:column; gap:4px; }
   .sb-session-tools[hidden] { display:none; }
   #sb-session-message:empty { display:none; }
-  #sb-hist { max-height:min(32svh,240px); overflow-y:auto; margin:0; gap:3px;
-    scrollbar-gutter:stable; overscroll-behavior:contain; }
+  /* 以前はここに max-height:min(32svh,240px) の独自スクロールを持たせていたが、パネル全体の
+     スクロール(旧実装)と二重になり、セッション一覧が画面下半分の小箱に閉じ込められて操作しづらい
+     という報告があった（2026-10-13）。.sb-body 側のスクロール1つに一本化し、ここは固定高さを
+     持たず自然に伸びる。 */
+  #sb-hist { margin:0; gap:3px; }
   .sb-session-help { color:var(--muted); font-size:.76rem; line-height:1.5; margin:0; overflow-wrap:anywhere; }
   .sb-session-label { font-size:.8rem; }
   .sb-session-control { width:100%; min-height:44px; box-sizing:border-box; border:1px solid var(--line);

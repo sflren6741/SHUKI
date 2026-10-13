@@ -9,6 +9,24 @@ function safeDestination(path) {
     ? url.href : self.location.origin + '/notifications';
 }
 
+async function handOffToWindow(client, url) {
+  if (typeof client.postMessage !== 'function') return false;
+  const channel = new MessageChannel();
+  try {
+    return await new Promise(resolve => {
+      const timer = setTimeout(() => resolve(false), 750);
+      channel.port1.onmessage = event => {
+        clearTimeout(timer);
+        resolve(event.data && event.data.handled === true);
+      };
+      client.postMessage({type: 'shuki-open-notification', url}, [channel.port2]);
+    });
+  } finally {
+    channel.port1.close();
+    channel.port2.close();
+  }
+}
+
 self.addEventListener('push', event => {
   let message = {};
   try { message = event.data ? event.data.json() : {}; } catch (_) { /* Show a usable default. */ }
@@ -41,27 +59,41 @@ self.addEventListener('notificationclick', event => {
     if (match && data.token) {
       let received = false;
       let duplicate = false;
+      let reason = '';
       try {
         const response = await fetch('/push/reply', {
           method: 'POST', credentials: 'same-origin', redirect: 'error',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({token: data.token, index: Number(match[1])}),
-          signal: AbortSignal.timeout(10000),
+          signal: AbortSignal.timeout(30000),
         });
         const result = await response.json();
         received = response.ok && result.ok === true;
         duplicate = result.duplicate === true;
+        if (!received && typeof result.error === 'string')
+          reason = result.error === 'busy' ? 'A reply is already running. Check the conversation.'
+            : result.error.slice(0, 220);
       } catch (_) { /* Never retry an uncertain submission automatically. */ }
       await self.registration.showNotification(received ? 'Reply received' : 'Check your reply in SHUKI', {
         body: received ? (duplicate ? 'This reply was already received.' : 'Your conversation is continuing.')
-          : 'The reply could not be confirmed. Open the conversation before trying again.',
+          : reason || 'The reply could not be confirmed. Open the conversation before trying again.',
         icon: '/icon-192.png', tag: data.tag, data: {url},
       });
       return;
     }
     const windows = await self.clients.matchAll({type: 'window', includeUncontrolled: true});
     const existing = windows.find(client => client.url === url);
-    if (existing) return existing.focus();
+    const candidate = existing || windows.find(client =>
+      new URL(client.url).origin === self.location.origin && client.visibilityState === 'visible')
+      || windows.find(client => new URL(client.url).origin === self.location.origin);
+    if (candidate && typeof candidate.postMessage === 'function') {
+      try {
+        await candidate.focus();
+        if (await handOffToWindow(candidate, url)) return;
+        if (candidate === existing) return;
+      } catch (_) { /* A closing or old window falls back to the saved URL. */ }
+    }
+    if (existing && typeof existing.postMessage !== 'function') return existing.focus();
     // Do not navigate an unrelated conversation or discard its unsent input.
     return self.clients.openWindow(url);
   })());

@@ -88,7 +88,7 @@ Glob: 04_Tasks/タスク管理/タスク/*.md
 
 ### 5. 案を提示（調整前提）
 
-mermaid timeline ＋ 箇条書きの2本立てで出す（Obsidian/チャット両対応）。**時刻ラベルにコロン `:` を使わない**（mermaid timeline が壊れる。`22時` 形式で書く）。
+mermaid timeline ＋ 箇条書きの2本立てで出す（ダッシュボード/チャット両対応）。**時刻ラベルにコロン `:` を使わない**（mermaid timeline が壊れる。`22時` 形式で書く）。
 
 ````markdown
 ## 🗓 今日の時間割案 — YYYY-MM-DD (曜)

@@ -196,11 +196,17 @@ def _install_crash_logging() -> None:
 # code.cmd（CLIラッパー）経由が task buttons で実績のある経路。URLは全体を %エンコードするので cmd の & 事故はない
 CODE_CLI = shuki_paths.CODE_CLI
 VOICEVOX_STOP = Path(__file__).resolve().parent / "voicevox_stop.ps1"
-ENGLISH_TTS_VOICE = "Microsoft Zira Desktop"
+ENGLISH_TTS_VOICE = "Microsoft Zira Desktop"  # fallback when Kokoro is unavailable
 ENGLISH_TTS_RATE = 0
+# English neural TTS: local Kokoro (kokoro-onnx, CPU, no network). Model files live in KOKORO_DIR.
+KOKORO_DIR = shuki_paths.KOKORO_DIR
+KOKORO_VOICE = "af_heart"   # American English female; best-rated Kokoro voice
+KOKORO_SPEED = 1.0
+KOKORO_LOCK = threading.Lock()
+_kokoro_model = None
 # /tts（ブラウザ読み上げ）用。radio_gen.py と同じ VOICEVOX ENGINE を叩く薄いプロキシ
 VOICEVOX_ENGINE = "http://127.0.0.1:50021"
-# /tts?voice=en-US uses local Windows Speech (Zira); an omitted voice keeps VOICEVOX.
+# /tts?voice=en-US uses local Kokoro (Zira as fallback); an omitted voice keeps VOICEVOX.
 TTS_SPEAKER = 3      # ずんだもん
 TTS_SPEED = 1.3      # voicevox_speak.ps1 の $SpeedScale と揃える
 TTS_MAX_CHARS = 200  # 1リクエスト上限（ブラウザ側が約60字で分割して送る前提の安全弁）
@@ -220,6 +226,7 @@ STT_START_LOCK = threading.Lock()
 # （ヘッドレスは --dangerously-skip-permissions なのでローカルパスを参照できる）。
 ASSETS_DIR = Path(__file__).resolve().parent / "dashboard_assets"  # ロゴ・アイコンPNG（icon-*.png）
 ICON_SIZES = ("512", "192", "180", "32", "16")
+MARKMAP_ASSETS = ("/assets/d3.min.js", "/assets/markmap-view.min.js", "/assets/shuki-markmap.js")
 
 UPLOAD_DIR = shuki_paths.code_store("core/dashboard_uploads")
 UPLOAD_MAX_BYTES = 20 * 1024 * 1024  # 20MB
@@ -300,6 +307,8 @@ _DASHBOARD_REPLY_STYLE = (
     "Obsidian callout such as > [!warning] Title or > [!tip] Title for a single risk or tip that must stand out. "
     "Do not highlight more than two phrases per reply, and do not add these blocks to one-line answers. "
     "The dashboard chat panel renders markdown:fenced ```mermaid blocks become diagrams, "
+    "fenced ```markmap blocks (a nested Markdown list) become an aligned left-to-right mind map "
+    "(use markmap for any mind map; never mermaid mindmap), "
     "[text](https://...) links become clickable, and ![alt](path) becomes an inline image "
     "(vault-relative paths resolve automatically; full http(s) URLs also work). Use a mermaid diagram, "
     "an image, or a source link only when it genuinely helps (e.g. explaining a structure/flow, showing "
@@ -2728,15 +2737,17 @@ def md_to_html(text):
     while i < n:
         line = lines[i]
         if line.strip().startswith("```"):
-            if not in_code and line.strip()[3:].strip().lower() == "mermaid":
-                # mermaid だけは図として出す（`<pre class="mermaid">` はページ側の mermaid.js が描画する）。
+            lang = line.strip()[3:].strip().lower()
+            if not in_code and lang in ("mermaid", "markmap"):
+                # mermaid / markmap だけは図として出す（`<pre class="mermaid">` はページ側の mermaid.js、
+                # `<pre class="markmap">` は /assets/shuki-markmap.js が描画する）。
                 close_callout(); close_list()
                 j = i + 1
                 buf = []
                 while j < n and not lines[j].strip().startswith("```"):
                     buf.append(lines[j])
                     j += 1
-                out.append('<pre class="mermaid">' + html.escape("\n".join(buf)) + "</pre>")
+                out.append(f'<pre class="{lang}">' + html.escape("\n".join(buf)) + "</pre>")
                 i = j + 1
                 continue
             in_code = not in_code
@@ -3297,7 +3308,8 @@ def load_transcript(session_id, limit=200):
 CODEX_HOME = Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
 # rollout ファイルに紛れ込む注入ブロック（skills 一覧・プラグイン案内等）。ユーザーの実発言では
 # ないので会話ログからは落とす。Claude 側の SKILL_INJECTION_PREFIX と同じ役割。
-CODEX_INJECTION_RE = re.compile(r"^<(skills_instructions|recommended_plugins|user_instructions|environment_context)>")
+CODEX_INJECTION_RE = re.compile(
+    r"^(<(skills_instructions|recommended_plugins|user_instructions|environment_context)>|# AGENTS\.md instructions for )")
 
 
 def find_codex_rollout(thread_id):
@@ -4814,6 +4826,38 @@ def synthesize_tts(text):
 
 
 def synthesize_english_tts(text):
+    """Return an English WAV: local Kokoro neural voice, falling back to Windows Zira."""
+    try:
+        return synthesize_kokoro_tts(text)
+    except Exception as e:
+        print(f"[tts] Kokoro unavailable, using Zira: {e}", file=sys.stderr)
+        return synthesize_zira_tts(text)
+
+
+def synthesize_kokoro_tts(text):
+    """Synthesize with Kokoro (loaded once, ~2 s; then ~1 s per sentence on CPU)."""
+    global _kokoro_model
+    import io
+    import wave
+    with KOKORO_LOCK:  # onnxruntime session reuse; one synthesis at a time keeps CPU predictable
+        if _kokoro_model is None:
+            if not KOKORO_DIR or not (KOKORO_DIR / "kokoro-v1.0.onnx").is_file():
+                raise RuntimeError("Kokoro model files are not configured")
+            from kokoro_onnx import Kokoro
+            _kokoro_model = Kokoro(str(KOKORO_DIR / "kokoro-v1.0.onnx"),
+                                   str(KOKORO_DIR / "voices-v1.0.bin"))
+        samples, rate = _kokoro_model.create(text, voice=KOKORO_VOICE, speed=KOKORO_SPEED, lang="en-us")
+    pcm = (samples.clip(-1.0, 1.0) * 32767).astype("<i2").tobytes()
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(pcm)
+    return buf.getvalue()
+
+
+def synthesize_zira_tts(text):
     """Return a WAV using the installed local Windows English speech voice."""
     if os.name != "nt":
         raise RuntimeError("local Windows English TTS is unavailable on this platform")
@@ -5963,8 +6007,10 @@ HOME_WRITE_CSS = """
   .hw-primary { background:var(--accent); border-color:var(--accent); color:var(--bg); }
   .hw-status { min-height:1.2em; font-size:.8rem; color:var(--teal); }
   .hw-status.error { color:var(--red); }
-  .hw-recent > summary { min-height:44px; display:flex; align-items:center; gap:6px; color:var(--muted);
+  /* §6.2: S size 32 px; ::before is the ▸ marker, so ::after carries the 44 px tap height. */
+  .hw-recent > summary { position:relative; min-height:32px; display:flex; align-items:center; gap:6px; color:var(--muted);
     font-size:.82rem; cursor:pointer; }
+  .hw-recent > summary::after { content:''; position:absolute; inset:-6px 0; }
   .hw-recent > summary:hover { color:var(--fg); }
   .hw-recent > summary::-webkit-details-marker { display:none; }
   .hw-recent > summary::before { content:'▸'; width:1em; }
@@ -8128,6 +8174,13 @@ class Handler(BaseHTTPRequestHandler):
                     self._respond(200, data, "application/javascript; charset=utf-8")
                 except OSError:
                     self._respond(404, b"not found")
+            elif parsed.path in MARKMAP_ASSETS:
+                # ```markmap（整列ツリー型マインドマップ・2026-10-13）用。mermaid と同じくローカル同梱。
+                try:
+                    data = (ASSETS_DIR / parsed.path[len("/assets/"):]).read_bytes()
+                    self._respond(200, data, "application/javascript; charset=utf-8")
+                except OSError:
+                    self._respond(404, b"not found")
             elif parsed.path == "/theme.css":
                 # デザイントークン単一情報源（🖥 UIデザイン原則 §1・§7）。全ページがこれを <link> する。
                 self._respond(200, dashboard_theme.theme_css().encode("utf-8"), "text/css; charset=utf-8")
@@ -8311,7 +8364,9 @@ class Handler(BaseHTTPRequestHandler):
                     return start_job("", record["choices"][index], session=record["session"], confirm=True)
 
             result = shuki_webpush.consume_reply(data.get("token"), data.get("index"), submit)
-        except (ValueError, TypeError):
+        except ValueError as error:
+            self._json_err(400, str(error))
+        except TypeError:
             self._json_err(400, "This reply is invalid, expired or already used. Open the conversation.")
         except BlockingIOError:
             self._json_err(409, "Another reply is being handled. Check the conversation.")

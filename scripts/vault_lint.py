@@ -16,9 +16,12 @@ vault_lint.py — vault の決定的QAチェッカー（LLM不使用・誤検出
   6. frontmatter 完全欠落（DBフォルダ配下・参考枠）
   7. デッドwikilink（参考情報・エラー扱いしない）
   8. nullバイト／不正UTF-8（ripgrep 不可視＝他エージェントから取りこぼされる・2026-09-03 追加）
+  9. ギャラリー画像の欠落（gallery.json の preview_image が実ファイルに無い・2026-10-13 追加。
+     raw/generated 56件が消失し気づくまで4日かかった事故を受け、翌日の『要対応』に乗せて早期検知する）
 
 出力: 99_System/qa/YYYY-MM-DD.md（従来と同じ場所・朝の orchestrator トリアージ互換）
 """
+import json
 import re
 import sys
 import unicodedata
@@ -256,6 +259,35 @@ def area_values(fm) -> list:
     return out
 
 
+def check_gallery_images(vault: Path = None, gallery_path: Path = None) -> list:
+    """gallery.json の preview_image 参照が実ファイルと一致するか確認する。
+
+    2026-10-13 導入：raw/generated 配下の生成画像56件がDriveのゴミ箱に消え、気づくまで4日
+    かかった事故を受けた早期検知。欠落1件以上なら main() が『要対応』に積み、既存の決裁補充
+    （P_INBOX_DECISION・vault_lint 要対応を読む）経由で同日中に /decisions へ上がる
+    （新しい通知経路は作らない）。重複パス（複数エントリが同じ画像を参照）は1回だけ数える。
+    """
+    vault = vault or VAULT
+    gallery_path = gallery_path or (shuki_paths.system_dir_for(vault) / "visualize" / "gallery.json")
+    if not gallery_path.exists():
+        return []
+    try:
+        entries = json.loads(gallery_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    missing, seen = [], set()
+    for e in entries if isinstance(entries, list) else []:
+        if not isinstance(e, dict) or e.get("preview_kind") != "image":
+            continue
+        rel = norm_str(e.get("preview_image"))
+        if not rel or rel in seen:
+            continue
+        seen.add(rel)
+        if not (vault / rel).exists():
+            missing.append(rel)
+    return missing
+
+
 def main():
     today = datetime.now().strftime("%Y-%m-%d")
     findings = {}      # relpath -> [msg]（要対応）
@@ -369,6 +401,14 @@ def main():
 
         if msgs:
             findings[rel] = msgs
+
+    # ギャラリー画像の欠落（per-file ループの外・9. 2026-10-13 追加）
+    missing_images = check_gallery_images()
+    if missing_images:
+        findings["(gallery.json) 画像参照チェック"] = [
+            f"preview_image が実ファイルに無い: {len(missing_images)} 件"
+            f"（例: `{missing_images[0]}`）"
+        ]
 
     # レポート出力
     OUT_DIR.mkdir(parents=True, exist_ok=True)

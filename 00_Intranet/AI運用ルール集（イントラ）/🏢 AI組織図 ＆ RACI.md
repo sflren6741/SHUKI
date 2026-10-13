@@ -37,7 +37,7 @@ flowchart LR
 	O --> Eng["🦜 english（IELTS添削）"]
 	O --> Kno["🕷️ knowledge（URL→ナレッジ）"]
 	O --> Infra["🦔 infrastructure（棚卸し・停滞検知）"]
-	O --> Vault["📚 Obsidian Vault（PARA構造）"]
+	O --> Vault["📚 Vault（PARA構造）"]
 	H -.->|"/コマンド"| Sk["🎛️ スキル群<br>next/schedule/scan/visualize 等"]
 	H --> Board["🖥️ SHUKIダッシュボード(8765)"]
 ```

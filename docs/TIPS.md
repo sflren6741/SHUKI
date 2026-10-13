@@ -1,6 +1,6 @@
 ﻿# Tips & mental models / 使いこなしと思考モデル
 
-> **TL;DR (EN)** — A few ideas do most of the work: organize by a `type:` property (not rigid folders); link files with wikilinks in two layers (structural in frontmatter, selective in body); promote recurring themes into "concept nodes" that become graph hubs; render dynamic views with Obsidian Bases; and keep hard boundaries (money/health/relationship messages need a human). Master these and the vault compounds in value.
+> **TL;DR (EN)** — A few ideas do most of the work: organize by a `type:` property (not rigid folders); link files with wikilinks in two layers (structural in frontmatter, selective in body); promote recurring themes into "concept nodes" that become graph hubs; render dynamic filtered views with `base` blocks, which the dashboard renders natively; and keep hard boundaries (money/health/relationship messages need a human). Master these and the vault compounds in value.
 
 少数の考え方が効果の大半を生む。順に。
 
@@ -8,7 +8,7 @@
 
 ## 1. wikilink でファイルを関連付ける / Relate files with wikilinks
 
-`[[ファイル名]]` でノート同士をつなぐ。Obsidian はこれを双方向リンク（backlinks）として扱うので、**片方を書けば逆側にも自動で現れる**。情報が「フォルダの位置」ではなく「関係性」で取り出せるようになる。
+`[[ファイル名]]` でノート同士をつなぐ。これはただの記法だが、`person: "[[名前]]"` のように frontmatter に書けば、その wikilink をキーに関連ノートを検索・集約できる。情報が「フォルダの位置」ではなく「関係性」で取り出せるようになる。
 
 **2層リンク戦略**で運用するのがコツ：
 
@@ -48,15 +48,15 @@ PARA（Projects / Areas / Resources / Archive）を**硬いフォルダで切ら
 
 ---
 
-## 4. Obsidian Bases で動的ビュー / Dynamic views with Bases
+## 4. base ブロックで動的ビュー / Dynamic views with `base` blocks
 
-`area` / `parent` / `status` などのプロパティで**動的な表**を作る。Area ハブや Project ハブに Bases コードブロックを置けば、該当ノートが自動で集まる（`_example-area.md` 参照）。フォルダを開かなくても「この領域の全ノート」が一覧できる。
+`area` / `parent` / `status` などのプロパティで**動的な表**を作る。Area ハブや Project ハブに ```base``` コードブロックを置けば、該当ノートが自動で集まる（`_example-area.md` 参照）。これはダッシュボード（`view_engine.py`）がネイティブに解釈するので、ビューア設定は不要。フォルダを開かなくても「この領域の全ノート」が一覧できる。
 
 ---
 
 ## 5. MOC（Map of Content）/ 手動キュレーション
 
-テーマ別の入口は `00_Intranet/MOC/<テーマ>.md` に**手で**作る（AIには自動生成させない領域）。例：「アニメ図書館」「人物関係図」「自己理解マップ」。Bases が「自動の集約」なら、MOC は「人間の編集した地図」。
+テーマ別の入口は `00_Intranet/MOC/<テーマ>.md` に**手で**作る（AIには自動生成させない領域）。例：「アニメ図書館」「人物関係図」「自己理解マップ」。base ブロックが「自動の集約」なら、MOC は「人間の編集した地図」。
 
 ---
 

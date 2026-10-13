@@ -3,7 +3,7 @@
 > 📖 **New here?** Start with the [README](README.md) (overview, philosophy, setup).
 > This file is the **operating manual body** that Claude Code loads every session, and it's written for the owner's personal vault. Placeholders like `<...>` and `<WORKSPACE>` should be replaced with your own environment's values. The fastest way to bootstrap is `/setup`.
 
-This is the owner's AI agent operating intranet. A local vault with a PARA structure. Also editable in Obsidian.
+This is the owner's AI agent operating intranet. A local vault with a PARA structure (Markdown). Day-to-day use happens through the SHUKI dashboard.
 
 ## 🗂 Directory map
 
@@ -92,7 +92,7 @@ Full detail lives under `00_Intranet/AI Operating Rules (Intranet)/`.
 7. **Dates and titles are mandatory on logs** — when creating a new log, knowledge note, task, etc., always fill in the following frontmatter fields:
    - `date` — the date the content refers to (for transcribed material, the **original date**)
    - `created` — the date the file was actually created (the generation date, if AI-generated)
-   - `title` — the same value as the filename is fine, but it must be present and wrapped in `"` (for portability outside Obsidian; checked by vault_lint)
+   - `title` — the same value as the filename is fine, but it must be present and wrapped in `"` (for portability to other tools; checked by vault_lint)
    - If `date` refers to a period rather than a specific day, use the **last day of the period** (for reports, retrospectives, etc. — express the period itself in the filename or a `period:` field)
 8. **YAML output rules** — always follow "one independent metadata item per line" and "wrap the entire value in `"` if it contains `:`, `false/true`, or an emoji." Don't cram multiple metadata items into `memo:`. Details → `📋 Common Agent Template.md` §YAML (frontmatter) output rules
 9. **Inbox information migration rule** — an inbox file doesn't need to be deleted once `status: done`. However, **the information it holds must be migrated to its proper home (knowledge, log, Project hub, task, etc.) before marking it done**. Details → Task Management Rules §3.8
@@ -106,7 +106,7 @@ Full detail lives under `00_Intranet/AI Operating Rules (Intranet)/`.
 
 ## 🧭 Type-driven PARA operations
 
-Express the PARA framework **through the `type` property rather than strict physical folders**. Obsidian's Bases + wikilinks + properties are powerful, so an attribute-driven approach is more flexible than a folder-driven one.
+Express the PARA framework **through the `type` property rather than strict physical folders**. The combination of wikilinks and properties is powerful, so an attribute-driven approach is more flexible than a folder-driven one. The dashboard's lists and filters build on the same design.
 
 ### Mapping between PARA and physical folders
 
@@ -266,7 +266,7 @@ If you bring exported data from an external service (messaging app, etc.) into t
 
 ### Person notes (👤Person)
 
-Placed under `06_Resources/Resources/Knowledge/` with `type: 👤Person`. Linked as a wikilink via `person: "[[Name]]"` in a log's frontmatter. Auto-aggregated in Obsidian's backlinks panel. If a log's frontmatter `date` covers a period, use the **last day**.
+Placed under `06_Resources/Resources/Knowledge/` with `type: 👤Person`. Linked as a wikilink via `person: "[[Name]]"` in a log's frontmatter. Related logs can be searched and gathered using that wikilink as the key. If a log's frontmatter `date` covers a period, use the **last day**.
 
 ## 📅 Operating phases (record your own change history)
 

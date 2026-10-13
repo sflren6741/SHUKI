@@ -485,11 +485,17 @@ CSS = r'''
   .chat-input-row { display:flex; flex-wrap:nowrap; gap:6px; flex:0 0 auto; position:relative; }
   /* 入力行（§6.2 M段）: 入力欄と3つのボタンを 40px で揃える。押せる範囲は ::before で上下2px＋border分
      （inset -3px）足して 44px。左右は隣と重ならないよう border 分だけ。 */
-  .chat-input-row { align-items:center; }
+  /* 入力欄は複数行（2026-10-13）: 1行 40px から内容に合わせて4行（100px）まで伸び、超えたらスクロール。
+     伸びてもボタンは下端に揃える（flex-end）。 */
+  .chat-input-row { align-items:flex-end; }
   .chat-input-row > .rbtn { position:relative; flex:0 0 auto; width:40px; height:40px; min-height:40px; padding:0;
     box-sizing:border-box; display:inline-flex; align-items:center; justify-content:center; }
   .chat-input-row > .rbtn::before { content:''; position:absolute; inset:-3px -1px; }
-  .chat-input-row > input { height:40px; min-height:40px; box-sizing:border-box; }
+  .chat-input-row > textarea { flex:1 1 0; min-width:0; height:40px; min-height:40px; max-height:100px;
+    box-sizing:border-box; resize:none; overflow-y:hidden; line-height:20px; padding:9px 10px;
+    background:var(--bg); border:1px solid var(--line); border-radius:8px; color:var(--fg);
+    font-size:.86rem; font-family:inherit; }
+  .chat-input-row > textarea:focus { outline:none; border-color:var(--accent); }
   .chat-input-row > .rbtn .chat-icon, .result-actions .rbtn .chat-icon { margin:0; display:block; }
   .result-actions .rbtn { display:inline-flex; align-items:center; justify-content:center; gap:3px; }
   .result-actions .rbtn[hidden] { display:none; }
@@ -779,9 +785,9 @@ HTML = r'''
       </div>
       <input id="chat-file" type="file" accept="image/*,.pdf,.txt,.md,.csv" hidden
         onchange="onFilePick(this)">
-      <input id="chat-input" type="text" placeholder="続きを入力…（Enterで送信）"
-        oninput="rememberChatDraft();updateSendBtn()" onfocus="updateSendBtn()"
-        onkeydown="if(event.key==='Enter'){sendFollowup();return false;}">
+      <textarea id="chat-input" rows="1" placeholder="続きを入力…（Enterで送信）"
+        oninput="rememberChatDraft();updateSendBtn()" onfocus="chatInputFocus(this)"
+        onpointerdown="chatInputPointer=true" onkeydown="chatInputKey(event)"></textarea>
       <button id="chat-add-btn" type="button" class="rbtn" onclick="toggleChatAddMenu()"
         title="Add attachments or skills" aria-label="Add attachments or skills"
         aria-expanded="false" aria-controls="chat-add-menu">__ICON_PLUS__</button>
@@ -875,6 +881,9 @@ JS = r'''
   // 各ページの静的アプリJS（activity/concept_game/finance_game/habit_funnel）が別の意味の $ を
   // const 宣言しているため、ドック側は名前を分けて衝突を避ける（2026-08-11）。
   const byId = id => document.getElementById(id);
+  function shouldAutoFocusTextInput() {
+    return !window.matchMedia('(max-width: 700px), (pointer: coarse)').matches;
+  }
   // Keep existing select handlers/stores; these buttons only present their choices.
   let chatControlSource = null;
   function syncChatControls() {
@@ -1036,6 +1045,7 @@ JS = r'''
     chatSession = t ? t.session : '';
     chatLabel = t ? t.label : '';
     byId('chat-input').value = t ? t.draft : '';
+    fitChatInput();
   }
 
   function makeTabObj(label) {
@@ -1533,8 +1543,8 @@ JS = r'''
         while (i < lines.length && !FENCE.test(lines[i])) { buf.push(lines[i]); i++; }
         const closed = i < lines.length;  // 閉じ```がまだ来ていない＝ストリーミング中の未完成断片
         if (closed) i++;
-        out.push(lang === 'mermaid' && closed
-          ? '<pre class="mermaid">' + buf.join('\n') + '</pre>'
+        out.push((lang === 'mermaid' || lang === 'markmap') && closed
+          ? '<pre class="' + lang + '">' + buf.join('\n') + '</pre>'
           : '<pre class="cm-code"><code>' + buf.join('\n') + '</code></pre>');
         continue;
       }
@@ -1626,6 +1636,7 @@ JS = r'''
   // 最新DOMから再取得する（読み込み待ちの間にストリーミングで innerHTML が差し替わっても安全）。
   function renderMermaidIn(el) {
     if (!el || !el.querySelectorAll) return;
+    renderMarkmapIn(el);
     if (!el.querySelectorAll('pre.mermaid').length) return;
     loadMermaid(() => {
       const nodes = [...el.querySelectorAll('pre.mermaid')];
@@ -1644,13 +1655,31 @@ JS = r'''
     });
   }
 
+  // ```markmap（入れ子リスト → 整列ツリー型マインドマップ・2026-10-13）。mermaid の mindmap は
+  // 放射状で整列できないため置き換えた。描画本体は /assets/shuki-markmap.js（files/review と共用）で、
+  // ブロックが現れた時だけ読み込む。renderMermaidIn() から毎回呼ばれる（対象が無ければ何もしない）。
+  let _markmapLoading = null;
+  function renderMarkmapIn(el) {
+    if (!el.querySelectorAll('pre.markmap').length) return;
+    if (!_markmapLoading) {
+      _markmapLoading = new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = '/assets/shuki-markmap.js';
+        s.onload = resolve;
+        s.onerror = () => { _markmapLoading = null; reject(new Error('shuki-markmap.js failed to load')); };
+        document.head.appendChild(s);
+      });
+    }
+    _markmapLoading.then(() => window.shukiRenderMarkmaps(el)).catch(e => console.warn('markmap:', e));
+  }
+
   function setBusy(on) {
     document.querySelectorAll('.exec-btn').forEach(b => b.classList.toggle('busy', on));
     updateMiniBar(on);
     if (!on) stopRequestedJob = '';
     updateSendBtn();
     if (byId('voice-btn').getAttribute('aria-pressed') !== 'true') byId('chat-input').placeholder = on ? '返答中… 送信すると返答の後に届きます'
-                                                               : '続きを入力…（Enterで送信）';
+                                                               : chatIdlePlaceholder();
   }
 
   // ⏹ 実行中の claude -p を中断する（2026-08-18）。独立ジョブを誤停止しないよう、
@@ -1690,7 +1719,59 @@ JS = r'''
     }
     const tab = activeTabObj();
     btn.disabled = stop && !!tab && stopRequestedJob === tab.jobId;
+    fitChatInput();
   }
+
+  // 複数行入力（2026-10-13）: PC は Enter＝送信・Shift+Enter＝改行。タッチ端末は Enter＝改行で、送信はボタン。
+  // IME 変換確定の Enter は送信しない。
+  let chatInputPointer = false;
+  const chatTouchInput = () => matchMedia('(pointer: coarse)').matches;
+  const CHAT_HINT_TOUCH = { placeholder: '続きを入力…' };  // placeholder: キーで i18n の翻訳対象になる
+  const CHAT_HINT_DESK = { placeholder: '続きを入力…（Enterで送信・Shift+Enterで改行）' };
+  function chatIdlePlaceholder() {
+    return (chatTouchInput() ? CHAT_HINT_TOUCH : CHAT_HINT_DESK).placeholder;
+  }
+  function fitChatInput() {
+    const inp = byId('chat-input');
+    if (!inp || !inp.offsetParent) return;  // 非表示中は scrollHeight が測れない。表示後の focus/input で合わせる
+    // 入力欄の高さが変わると会話ログが縮み、最下部にいても最新メッセージが隠れる。最下部にいた時だけ戻す。
+    const log = byId('chat-log');
+    const pinned = !!log && log.scrollHeight - log.clientHeight - log.scrollTop <= 1;
+    inp.style.height = '';
+    // 空欄では1行のまま。Chromium は空の textarea の scrollHeight に placeholder の折り返しを含めるため、
+    // 狭い画面で長い案内文に合わせて欄が伸びていた（2026-10-13・390px で 40→80px）。
+    if (!inp.value) {
+      inp.style.overflowY = 'hidden';
+      if (pinned) log.scrollTop = log.scrollHeight;
+      return;
+    }
+    const need = inp.scrollHeight + inp.offsetHeight - inp.clientHeight;  // 上下 border 分を足す（border-box）
+    inp.style.height = Math.min(need, 100) + 'px';
+    inp.style.overflowY = need > 100 ? 'auto' : 'hidden';
+    if (pinned) log.scrollTop = log.scrollHeight;
+  }
+  function chatInputKey(event) {
+    if (event.key !== 'Enter' || event.shiftKey || event.isComposing || event.keyCode === 229) return;
+    if (chatTouchInput()) return;
+    event.preventDefault();
+    sendFollowup();
+  }
+  // 入力欄に戻った時、キャレットが先頭に落ちていたら末尾（続きを書く位置）へ戻す。
+  // タップ/クリックで位置を選んだ場合は、ブラウザが置いた位置を pointerup 後に確認してから判断する。
+  function chatInputFocus(inp) {
+    updateSendBtn();
+    const viaPointer = chatInputPointer;
+    chatInputPointer = false;
+    const toEnd = () => {
+      if (document.activeElement !== inp || !inp.value) return;
+      if (inp.selectionStart === 0 && inp.selectionEnd === 0) {
+        inp.setSelectionRange(inp.value.length, inp.value.length);
+        inp.scrollTop = inp.scrollHeight;
+      }
+    };
+    if (viaPointer) setTimeout(toEnd, 0); else toEnd();
+  }
+  byId('chat-input').placeholder = chatIdlePlaceholder();
   function sendOrStop() {
     const btn = byId('chat-send-btn');
     if (btn.classList.contains('stop-mode') && sendBtnStopState()) {
@@ -1867,8 +1948,8 @@ JS = r'''
     return d;
   }
 
-  function openChat(label) {  // 自由入力チャット：プレフィルなしでこの場で開始（今アクティブなタブに開く）
-    ensureActiveTab();
+  function openChat(label) {  // 自由入力チャット：プレフィルなしで開始（既存タブに中身があれば新規タブを割る。2026-10-13）
+    if (!shukiPrepareSessionTab()) return false;
     voiceChat.end();
     exitWorkTab();
     byId('voice-bar').hidden = true;
@@ -1885,7 +1966,7 @@ JS = r'''
     byId('chat-input-row').hidden = false;
     byId('result').scrollIntoView({ behavior: 'smooth' });
     // Keep the software keyboard closed so touch users can choose voice first.
-    if (!window.matchMedia('(max-width: 700px), (pointer: coarse)').matches) {
+    if (shouldAutoFocusTextInput()) {
       byId('chat-input').focus();
     }
     renderTabBar();
@@ -1969,7 +2050,7 @@ JS = r'''
     byId('chat-history').hidden = false;
     byId('history-btn').setAttribute('aria-expanded', 'true');
     byId('chat-history-search').value = '';
-    byId('chat-history-search').focus();
+    if (shouldAutoFocusTextInput()) byId('chat-history-search').focus();
     chatHistoryItems = [];
     chatHistoryFailed = false;
     byId('chat-history-results').replaceChildren();
@@ -2045,7 +2126,7 @@ JS = r'''
       restoreResult();
       if (!reload || existing.pollTimer) {
         byId('result').scrollIntoView({ behavior: 'smooth' });
-        if (!existing.pollTimer) byId('chat-input').focus();
+        if (!existing.pollTimer && shouldAutoFocusTextInput()) byId('chat-input').focus();
         return false;
       }
     }
@@ -2079,7 +2160,7 @@ JS = r'''
     reloadTranscriptInPlace(activeTabObj());
     byId('chat-input-row').hidden = false;
     byId('result').scrollIntoView({ behavior: 'smooth' });
-    byId('chat-input').focus();
+    if (shouldAutoFocusTextInput()) byId('chat-input').focus();
     return false;
   }
 
@@ -2096,6 +2177,12 @@ JS = r'''
   }
 
   async function shukiResumeSessionLink(session) {
+    const existing = TABS.find(t => t.session === session);
+    if (existing) {
+      resumeHistory(session, existing.label, existing.model);
+      if (!tabBusy(existing)) refetchDock(existing, true);
+      return;
+    }
     try {
       const response = await fetch('/sessions/data?filter=all&session=' + encodeURIComponent(session));
       if (!response.ok) throw new Error('Could not find this saved session.');
@@ -2106,6 +2193,19 @@ JS = r'''
       resumeHistory(session, item.label, item.model);
     } catch (error) { alert(error.message); }
   }
+
+  if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', event => {
+    if (event.origin !== location.origin || event.data?.type !== 'shuki-open-notification') return;
+    let url;
+    try { url = new URL(event.data.url, location.origin); } catch (_) { return; }
+    if (url.origin !== location.origin || !['/', '/notifications', '/settings'].includes(url.pathname)) return;
+    const session = url.searchParams.get('resume');
+    if (url.pathname === '/' && !/^[0-9a-f-]{36}$/i.test(session || '')) return;
+    if (!dockRestoreDone) return;  // An initializing page uses the worker's ordinary URL fallback.
+    event.ports[0]?.postMessage({handled: true});
+    if (url.pathname === '/') shukiResumeSessionLink(session);
+    else if (location.href !== url.href) location.assign(url.href);
+  });
 
   async function applySessionTabRequest(job, sourceTab) {
     const action = job.session_tabs;
@@ -2285,7 +2385,11 @@ JS = r'''
   }
 
   function doExec(skill, textEnc, label, comment) {  // モデル確定後の実処理（旧 exec() 本体）
-    ensureActiveTab();
+    // 既存タブに中身があれば新規タブを割る（無ければ最初の1本を作る）。
+    // 2026-10-13: ここが ensureActiveTab() のまま＝常に今のアクティブタブを使い回して
+    // 丸ごと上書きしていたため、ドックを開いたまま別の一手（タスクボードの「一手」等）を
+    // 押すと開いていた対話が消える事故になっていた。
+    if (!shukiPrepareSessionTab()) return;
     voiceChat.end();
     byId('voice-bar').hidden = true;
     unlockAudio();  // exec ボタンタップ＝ジェスチャ
@@ -2442,6 +2546,25 @@ JS = r'''
         poll(d.job, msg, tab.id, d.model || '');
       })
       .catch(e => fail('送信に失敗: ' + e));
+  }
+
+  // 音声会話で承認した作業は、専用の作業パネルではなく普通の会話タブとして送る（2026-10-13）。
+  // switchTab は音声を終了させるので、新タブは裏で開き、音声会話のタブはそのまま残す。
+  function startChatInNewTab(label, text) {
+    if (TABS.length >= MAX_TABS) throw new Error('All ' + MAX_TABS + ' tabs are in use. Close one, then try again.');
+    pushMirrorToTab();
+    const tab = makeTabObj(label);
+    TABS.push(tab);
+    const pane = makePane(tab.id);
+    const user = document.createElement('div');
+    user.className = 'chat-msg user';
+    user.innerHTML = mdlite(text);
+    attachCopy(user, text);
+    const msg = document.createElement('div');
+    msg.className = 'chat-msg assistant';
+    msg.innerHTML = UI_ICONS.loading + ' 実行中…';
+    pane.append(user, msg);
+    startFollowup(tab, text, msg);
   }
 
   function sendFollowup() {  // チャット欄からの継続発言（session があれば --resume）
@@ -3231,6 +3354,7 @@ JS = r'''
   function rememberChatDraft() {
     const tab = activeTabObj();
     if (tab) tab.draft = byId('chat-input').value;
+    fitChatInput();
     try {
       if (!TABS.length) { sessionStorage.removeItem(DOCK_DRAFT_KEY); return; }
       // Save only text here; serializing transcripts on every keystroke is unnecessary.
@@ -3819,7 +3943,7 @@ const voiceChat = new VoiceConversation({
     // 終了したらバーごと畳む（入力欄のマイクボタンが戻るので再開はそこから）。エラー時だけ error() が出し直す。
     byId('voice-bar').hidden = !on;
     byId('voice-conversation-hint').hidden = !on;
-    byId('chat-input').placeholder = on ? 'Say it or type it here…' : 'Continue the conversation…';
+    byId('chat-input').placeholder = on ? 'Say it or type it here…' : chatIdlePlaceholder();
     byId('voice-btn').innerHTML = UI_ICONS.mic;
     byId('voice-btn').setAttribute('aria-pressed', String(on));
     byId('attach-btn').disabled = on;
@@ -3863,6 +3987,7 @@ const voiceChat = new VoiceConversation({
   // 音声の応答が返すセッションIDを対話パネル側にも渡す。これで音声を終えて
   // そのまま入力欄で続けても（逆に入力欄から音声へ移っても）同じ会話が続く。
   session: id => { if (id) chatSession = id; },
+  startChat: text => startChatInNewTab('Voice task', text),
   workReply: () => byId('voice-work-reply').value,
   clearWorkReply: () => { byId('voice-work-reply').value = ''; },
   notice: text => addMsg('assistant', mdlite(text), text),
@@ -3896,7 +4021,7 @@ const voiceChat = new VoiceConversation({
         : 'Ready to start. Reply naturally, or keep discussing; this plan stays visible.';
       byId('voice-proposal-error').textContent = proposal.error || '';
       byId('voice-work-start').disabled = !!proposal.starting;
-      byId('voice-work-start').textContent = proposal.starting ? 'Starting…' : 'Go ahead';
+      byId('voice-work-start').textContent = proposal.starting ? 'Opening…' : 'Go ahead';
     }
   },
   work: work => {

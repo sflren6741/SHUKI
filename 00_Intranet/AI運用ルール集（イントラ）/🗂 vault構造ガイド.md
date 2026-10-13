@@ -70,7 +70,7 @@ vault本体を補助する別レイヤー。`<localai>\` で管理。
 
 ## 🧭 Type-Driven PARA 運用
 
-PARA フレームワークを **物理フォルダで厳密に切らず、type プロパティで表現** する。Obsidian の Base ＋ wikilink ＋ プロパティが強力なので、属性駆動の方がフォルダ駆動より柔軟。
+PARA フレームワークを **物理フォルダで厳密に切らず、type プロパティで表現** する。SHUKI ダッシュボードの Base ＋ wikilink ＋ プロパティが強力なので、属性駆動の方がフォルダ駆動より柔軟。
 
 ### PARA と物理フォルダの対応
 
@@ -295,5 +295,5 @@ AI は勝手に MOC を作らない（手動キュレーション領域）。
 
 ### 人物ノート（👤人物）
 
-`06_Resources/Resources/ナレッジ/` に `type: 👤人物` で配置。ログのfrontmatterで `person: "[[名前]]"` としてwikilink接続。Obsidianのbacklinksパネルで自動集約。
+`06_Resources/Resources/ナレッジ/` に `type: 👤人物` で配置。ログのfrontmatterで `person: "[[名前]]"` としてwikilink接続。SHUKIダッシュボードのbacklinksパネルで自動集約。
 

@@ -1,16 +1,15 @@
 <div align="center">
 
-<img src="docs/assets/hero.svg" alt="SHUKI — Obsidian and Claude Code personal AI intranet" width="900">
+<img src="docs/assets/hero.svg" alt="SHUKI — Claude Code personal AI intranet" width="900">
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-brightgreen.svg)](LICENSE)
-[![Obsidian](https://img.shields.io/badge/Obsidian-7C3AED?logo=obsidian&logoColor=white)](https://obsidian.md/)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-D97757?logo=claude&logoColor=white)](https://claude.com/claude-code)
 
 [日本語](README.md)
 
 </div>
 
-SHUKI connects an Obsidian vault with AI workflows for organizing notes and tasks. Records stay in Markdown files, which Claude Code can add, search and organize. A local browser dashboard brings together tasks, a calendar, news feeds and requests for approval.
+SHUKI connects Markdown notes with AI workflows for organizing notes and tasks. Records stay in Markdown files, which Claude Code adds, searches and organizes behind the scenes. Day to day, you operate through the browser-based SHUKI dashboard — tasks, a calendar, news feeds, requests for approval, and a built-in AI chat.
 
 <img src="docs/assets/shuki-demo.gif" alt="Dashboard demo showing the task board, news, decision cards and AI chat" width="900">
 
@@ -18,7 +17,7 @@ SHUKI connects an Obsidian vault with AI workflows for organizing notes and task
 
 ## What's included
 
-- An Obsidian vault structure, note templates and sample data
+- A PARA folder structure, note templates and sample data — plain Markdown files, no viewer app required
 - Claude Code agent definitions and workflows for setup, research and weekly reviews
 - A local dashboard with AI chat, a task board, calendar, news and decision cards
 - Scripts for fetching feeds, checking note structure and scheduling work
@@ -27,7 +26,7 @@ The repository contains no personal notes, logs or credentials. The author's add
 
 ## Getting started
 
-Install [Claude Code](https://claude.com/claude-code) and [Obsidian](https://obsidian.md/), then download the repository. A ZIP download works if you don't use Git.
+Install [Claude Code](https://claude.com/claude-code), then download the repository. Claude Code requires a paid account (Claude Pro or API credits). A ZIP download works if you don't use Git.
 
 ```sh
 git clone https://github.com/sflren6741/SHUKI my-vault
@@ -35,11 +34,11 @@ cd my-vault
 claude
 ```
 
-Run `/setup` in Claude Code to configure your profile, areas of responsibility and local paths. Open `my-vault` as a vault in Obsidian. Some settings, such as enabling Obsidian plugins, require a step in the app.
+Run `/setup` in Claude Code to configure your profile, areas of responsibility and local paths.
 
 See the [setup guide](docs/en/SETUP.md) for installation and configuration details. For paper tracking and task management, use the [research quick start](docs/en/QUICKSTART-RESEARCH.md).
 
-### Running the dashboard
+### Running the dashboard (this is where day-to-day use happens)
 
 Use Python 3.11 or newer. Set `SHUKI_VAULT` to the absolute path of your vault and start the server from the repository root. In PowerShell:
 
@@ -48,9 +47,9 @@ $env:SHUKI_VAULT = (Get-Location).Path
 python scripts/dashboard_server.py
 ```
 
-Open <http://127.0.0.1:8765/> in your browser. The core runs on the Python standard library. AI chat needs the selected CLI configured; Google Calendar integration needs additional packages and an account connection. See [scripts/README.md](scripts/README.md) for details.
+Open <http://127.0.0.1:8765/> in your browser. Starting it needs PyYAML (`pip install pyyaml`); the rest of the core runs on the Python standard library. AI chat needs the selected CLI configured; Google Calendar integration needs additional packages and an account connection. See [scripts/README.md](scripts/README.md) for details.
 
-The dashboard and scheduled jobs are optional. You can start with Obsidian and Claude Code, then add them when you need them. The [automation guide](docs/en/AUTOMATION.md) covers scheduling.
+The dashboard calls Claude Code behind the scenes, so a Claude Code account is required, but everyday use happens entirely through the dashboard's screens. Scheduled jobs are optional — see the [automation guide](docs/en/AUTOMATION.md) if you want them.
 
 ## Everyday use
 
@@ -66,7 +65,7 @@ Turn this URL into a knowledge note: https://...
 
 <sub>An SVG illustration of chat interactions, shown in Japanese.</sub>
 
-You can read and edit the resulting notes in Obsidian. Wikilinks connect related notes; properties hold task status, due dates and other metadata. Use `/next` to choose a task to work on and `/weekly-review` for an interactive review.
+You can see the resulting notes on the dashboard's task board and calendar. They also stay on disk as files, so you can open and edit them in any editor. Wikilinks connect related notes; properties hold task status, due dates and other metadata. Use `/next` to choose a task to work on and `/weekly-review` for an interactive review.
 
 | Dashboard page | Use |
 |---|---|
@@ -77,7 +76,7 @@ You can read and edit the resulting notes in Obsidian. Wikilinks connect related
 
 ## How it works
 
-<img src="docs/assets/architecture.svg" alt="Architecture showing chat and a scheduler using Claude Code to read and write an Obsidian vault" width="900">
+<img src="docs/assets/architecture.svg" alt="Architecture showing chat and a scheduler using Claude Code to read and write a Markdown vault, which the SHUKI dashboard also operates on" width="900">
 
 <sub>The relationship between chat, agents and notes. Scheduled jobs shown in the diagram require separate configuration.</sub>
 
@@ -136,9 +135,8 @@ English guides are in [docs/en/](docs/en/), with optional English hub notes in [
 |---|---|
 | [Setup](docs/en/SETUP.md) | Installation and initial configuration |
 | [Research quick start](docs/en/QUICKSTART-RESEARCH.md) | Paper tracking and task management |
-| [Obsidian setup](docs/en/OBSIDIAN-SETUP.md) | Plugins, properties and links |
 | [Agents](docs/en/AGENTS.md) | Defining roles and adding agents |
-| [Mobile sync](docs/en/MOBILE-SYNC.md) | Android synchronization with FolderSync |
+| [Mobile sync](docs/en/MOBILE-SYNC.md) | Reaching the dashboard while you're out |
 | [Automation](docs/en/AUTOMATION.md) | Configuring scheduled jobs |
 | [Design notes](docs/en/TIPS.md) | PARA, wikilinks, concept notes and agent scope |
 

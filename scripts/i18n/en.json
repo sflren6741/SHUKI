@@ -454,6 +454,8 @@
   "絞り込む条件を追加": "Add a filter",
   "絞り込む軸": "Filter by",
   "続きを入力…（Enterで送信）": "Type to continue… (Enter to send)",
+  "続きを入力…（Enterで送信・Shift+Enterで改行）": "Type to continue… (Enter to send, Shift+Enter for a new line)",
+  "続きを入力…": "Type to continue…",
   "締切": "Due",
   "締切が近い順": "Due soonest",
   "締切なし": "No due date",

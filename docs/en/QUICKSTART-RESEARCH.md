@@ -18,10 +18,9 @@ You will **not** set up any scheduled jobs (Task Scheduler / cron). You run a co
 
 | # | Step |
 |---|---|
-| 1 | Install [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) — **a paid plan is required**. This is the main interface |
-| 2 | Install [Obsidian](https://obsidian.md/) — the viewer for reading notes and browsing the graph |
-| 3 | Check you have [Python 3](https://www.python.org/downloads/) (`python --version`). Used by the task board and the paper feed. No extra packages needed |
-| 4 | Get this repository |
+| 1 | Install [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) — **a paid plan is required**. This is the engine behind the scenes |
+| 2 | Check you have [Python 3](https://www.python.org/downloads/) (`python --version`). Used by the task board and the paper feed. Also run `pip install pyyaml` |
+| 3 | Get this repository |
 
 **Getting the repository** — if it's public:
 
@@ -30,8 +29,6 @@ git clone https://github.com/sflren6741/SHUKI my-vault
 ```
 
 If you were invited to it while it's still private, the easiest route is **Code → Download ZIP** while logged into GitHub (`git clone` would need authentication set up first). The extracted folder becomes your vault.
-
-**Open it**: in Obsidian, choose "Open folder as vault" and select that folder.
 
 ## 2. Make it yours (all in chat)
 
@@ -50,7 +47,7 @@ It asks for your name, what you care about, and your Areas (the domains you keep
 
 The bundled `_example-*.md` files exist to show how the properties are used. Delete them once they make sense.
 
-**Swap the four hub notes to English** — these are the notes you actually open in Obsidian (task DB, inbox, areas, resources):
+**Swap the four hub notes to English** — these are the notes the dashboard displays (task DB, inbox, areas, resources):
 
 ```powershell
 Copy-Item docs\en\vault-skeleton\タスク管理.md 04_Tasks\  -Force
@@ -149,8 +146,7 @@ It pulls literature from OpenAlex, arXiv, and web search, then returns a report 
 |---|---|
 | Keep structured notes on papers you've read | Tell Claude Code "turn this URL into a knowledge note" |
 | Have new papers fetched automatically | [AUTOMATION.md](AUTOMATION.md) (Tier C — including a "catch up when I open my laptop" setup) |
-| Read the vault on your phone | [MOBILE-SYNC.md](MOBILE-SYNC.md) |
-| Tune how Obsidian displays things | [OBSIDIAN-SETUP.md](OBSIDIAN-SETUP.md) |
+| Reach the dashboard from your phone | [MOBILE-SYNC.md](MOBILE-SYNC.md) |
 | See what commands exist | Each folder name under `.claude/skills/` is a `/` command. When unsure, just ask in plain words |
 
 ## If something goes wrong

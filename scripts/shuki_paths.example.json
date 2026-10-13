@@ -1,10 +1,12 @@
 {
-  "vault": "C:\\path\\to\\your\\Obsidian_Vault",
+  "vault": "C:\\path\\to\\your\\my-vault",
   "message_base": "C:\\path\\to\\your\\workspace",
   "data_dir": null,
   "code_cli": null,
   "stt_venv_python": null,
   "stt_script": null,
+  "kokoro_dir": null,
+  "local_backup_dir": null,
   "claude_accounts": [],
   "dora_names": [],
   "lang": "ja"

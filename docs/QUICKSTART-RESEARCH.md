@@ -18,10 +18,9 @@ SHUKI はフル構成だと「定期便が無人で回る」システムです�
 
 | # | やること |
 |---|---|
-| 1 | [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) をインストール（**有料プランが必要**。操作の主役） |
-| 2 | [Obsidian](https://obsidian.md/) をインストール（ノートを読む・グラフを見るビューア） |
-| 3 | [Python 3](https://www.python.org/downloads/) を確認（`python --version`。タスクボードと論文フィードに使う。追加ライブラリは不要） |
-| 4 | このリポジトリを取得 |
+| 1 | [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) をインストール（**有料プランが必要**。裏側のエンジン） |
+| 2 | [Python 3](https://www.python.org/downloads/) を確認（`python --version`。タスクボードと論文フィードに使う。追加で `pip install pyyaml` が必要） |
+| 3 | このリポジトリを取得 |
 
 **リポジトリの取得** — 公開されていれば:
 
@@ -30,8 +29,6 @@ git clone https://github.com/sflren6741/SHUKI my-vault
 ```
 
 privateリポジトリに招待された場合は、GitHub にログインした状態で **Code → Download ZIP** が一番手軽です（`git clone` だと認証設定が要る）。展開したフォルダが vault になります。
-
-**開く**: Obsidian で「Open folder as vault」→ そのフォルダを選ぶ。
 
 ## 2. 自分用に設定する（対話で終わる）
 
@@ -133,8 +130,7 @@ OpenAlex・arXiv・Web検索から文献を集めて、関連研究の一覧・*
 |---|---|
 | 論文を読んだメモを構造化して残す | Claude Code に「このURLをナレッジノートにして」と投げる |
 | 毎朝自動で新着を取ってきてほしい | [AUTOMATION.md](AUTOMATION.md)（C段。PCを開いた時に追いつく設定も可） |
-| スマホから vault を見る | [MOBILE-SYNC.md](MOBILE-SYNC.md) |
-| Obsidian の表示を整える | [OBSIDIAN-SETUP.md](OBSIDIAN-SETUP.md) |
+| 外出先からダッシュボードに繋ぎたい | [MOBILE-SYNC.md](MOBILE-SYNC.md) |
 | 使えるコマンドを一覧したい | `.claude/skills/` のフォルダ名がそのまま `/` コマンド名。迷ったら普通に話しかければよい |
 
 ## つまずいたら

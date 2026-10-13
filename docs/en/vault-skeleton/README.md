@@ -1,6 +1,6 @@
 # English vault skeleton
 
-The four notes you actually open in Obsidian, translated into English.
+The four notes the dashboard displays most, translated into English.
 
 The rest of the vault skeleton (folder names, `_Templates/`, `00_Intranet/`) stays in Japanese — the bundled scripts address those folders by path, so **renaming them breaks the dashboard**. These four are different: they are content, not paths, so they can be swapped freely.
 

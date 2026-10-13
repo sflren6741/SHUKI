@@ -45,11 +45,14 @@ PAGE = """<!DOCTYPE html>
     border-top:1px solid var(--line); padding-top:10px; }
   .c-yes { color:var(--teal); font-weight:bold; margin-right:3px; }
   .c-no { color:var(--red); font-weight:bold; margin:0 3px 0 10px; }
-  .c-btns { display:grid; grid-template-columns:repeat(auto-fit, minmax(76px, 1fr)); gap:8px; margin-top:18px; }
-  .cbtn { border:1px solid var(--line); border-radius:12px;
-    padding:10px 12px; color:var(--muted); background:var(--bg); cursor:pointer;
+  /* §6.2 (2026-10-13): M size 40 px on one line. The old equal-width grid let a long label
+     ("日時を確定") wrap and stretched every button in the row to 58 px; a wrapping flex row keeps
+     labels whole and moves a button to the next line instead. */
+  .c-btns { display:flex; flex-wrap:wrap; gap:8px; margin-top:18px; }
+  .cbtn { flex:1 1 auto; border:1px solid var(--line); border-radius:12px;
+    padding:0 12px; color:var(--muted); background:var(--bg); cursor:pointer; white-space:nowrap;
     font-size:.84rem; font-family:inherit; display:inline-flex; align-items:center;
-    justify-content:center; gap:5px; min-height:40px; }
+    justify-content:center; gap:5px; height:40px; min-height:40px; box-sizing:border-box; }
   .cbtn:hover { border-color:var(--accent); color:var(--fg); }
   .cbtn.sel { border-color:var(--teal); color:var(--teal); font-weight:bold; }
   .cbtn.errflash { border-color:var(--red); color:var(--red); }

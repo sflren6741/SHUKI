@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="900" height="540" viewBox="0 0 900 540" role="img" aria-label="SHUKI の構成図：スケジューラが Claude Code のエージェント群を定時起動し、Obsidian vault のローカル Markdown を読み書きする。Obsidian アプリは閲覧用。">
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="540" viewBox="0 0 900 540" role="img" aria-label="SHUKI の構成図：スケジューラが Claude Code のエージェント群を定時起動し、ローカル Markdown の vault を読み書きする。SHUKI ダッシュボードはブラウザから同じ vault を操作する。">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#16161a"/>
@@ -81,7 +81,7 @@
   <!-- vault -->
   <g class="sans">
     <rect x="642" y="100" width="228" height="272" rx="10" class="panel"/>
-    <text class="boxtitle" x="660" y="128">🗂 Obsidian Vault</text>
+    <text class="boxtitle" x="660" y="128">🗂 Vault（Markdown）</text>
     <text class="lbl" x="660" y="146">ぜんぶローカル Markdown</text>
     <g class="row">
       <circle cx="666" cy="170" r="4" fill="#e66767"/><text x="680" y="174">00_Intranet — 憲法・ルール</text>
@@ -100,12 +100,14 @@
   <line class="flow" x1="638" y1="256" x2="600" y2="256"/>
   <text class="lbl sans" x="619" y="276" text-anchor="middle">読む</text>
 
-  <!-- obsidian viewer -->
+  <!-- dashboard -->
   <g class="sans">
     <rect x="642" y="420" width="228" height="72" rx="10" class="panel"/>
-    <text class="boxtitle" x="660" y="448">👁 Obsidian アプリ</text>
-    <text class="row" x="660" y="472">グラフ・Bases ビューで俯瞰する</text>
-    <line class="flow" x1="756" y1="372" x2="756" y2="416"/>
-    <text class="lbl" x="768" y="398">閲覧</text>
+    <text class="boxtitle" x="660" y="448">💻 SHUKI ダッシュボード</text>
+    <text class="row" x="660" y="472">ブラウザでタスク・予定・決裁を操作</text>
+    <line class="flow" x1="732" y1="416" x2="732" y2="372"/>
+    <text class="lbl" x="700" y="398" text-anchor="middle">書く</text>
+    <line class="flow" x1="780" y1="372" x2="780" y2="416"/>
+    <text class="lbl" x="812" y="398" text-anchor="middle">読む</text>
   </g>
 </svg>

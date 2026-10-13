@@ -727,7 +727,7 @@ def settings_html():
 #mcp-settings .mcp-columns,#mcp-settings .mcp-row>summary{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr) minmax(0,.9fr) minmax(0,1fr) 16px;gap:12px;align-items:center}
 #mcp-settings .mcp-columns{font-size:12px;color:var(--muted);padding:0 0 6px}
 #mcp-settings .mcp-row{border-top:1px solid var(--line);margin:0}
-#mcp-settings .mcp-row>summary{list-style:none;cursor:pointer;padding:12px 0;font-size:13px;line-height:1.5;font-weight:400}
+#mcp-settings .mcp-row>summary{list-style:none;cursor:pointer;padding:8px 0;font-size:13px;line-height:1.5;font-weight:400}
 #mcp-settings .mcp-row>summary::-webkit-details-marker{display:none}
 #mcp-settings .mcp-row>summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 #mcp-settings .mcp-row>summary>*{min-width:0;overflow-wrap:anywhere}

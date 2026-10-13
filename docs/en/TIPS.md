@@ -1,6 +1,6 @@
 # Tips & mental models
 
-> **TL;DR (EN)** — A few ideas do most of the work: organize by a `type:` property (not rigid folders); link files with wikilinks in two layers (structural in frontmatter, selective in body); promote recurring themes into "concept nodes" that become graph hubs; render dynamic views with Obsidian Bases; and keep hard boundaries (money/health/relationship messages need a human). Master these and the vault compounds in value.
+> **TL;DR (EN)** — A few ideas do most of the work: organize by a `type:` property (not rigid folders); link files with wikilinks in two layers (structural in frontmatter, selective in body); promote recurring themes into "concept nodes" that become graph hubs; render dynamic filtered views with `base` blocks, which the dashboard renders natively; and keep hard boundaries (money/health/relationship messages need a human). Master these and the vault compounds in value.
 
 A handful of ideas do most of the work here. In order:
 
@@ -8,7 +8,7 @@ A handful of ideas do most of the work here. In order:
 
 ## 1. Relate files with wikilinks
 
-Link notes together with `[[filename]]`. Obsidian treats this as a bidirectional link (backlinks), so **writing one side makes it automatically appear on the other**. Information becomes retrievable by "relationship" rather than "folder location."
+Link notes together with `[[filename]]`. This is just a notation, but writing it into frontmatter — e.g. `person: "[[Name]]"` — lets you search and gather related notes by that wikilink as a key. Information becomes retrievable by "relationship" rather than "folder location."
 
 The trick is running a **two-layer link strategy**:
 
@@ -48,15 +48,15 @@ Once the same theme has appeared in **3 or more files**, create a small note und
 
 ---
 
-## 4. Dynamic views with Obsidian Bases
+## 4. Dynamic views with `base` blocks
 
-Build **dynamic tables** driven by properties like `area` / `parent` / `status`. Drop a Bases codeblock into an Area hub or Project hub and matching notes gather automatically (see `_example-area.md`). You can see "every note in this area" without opening a folder.
+Build **dynamic tables** driven by properties like `area` / `parent` / `status`. Drop a ```base``` codeblock into an Area hub or Project hub and matching notes gather automatically (see `_example-area.md`). The dashboard (`view_engine.py`) renders this natively, so no viewer app or plugin is needed. You can see "every note in this area" without opening a folder.
 
 ---
 
 ## 5. MOC (Map of Content) / manual curation
 
-Theme-based entry points go **by hand** in `00_Intranet/MOC/<theme>.md` (a zone the AI never auto-generates into). Examples: "Anime Library," "Relationship Map," "Self-Understanding Map." If Bases is "automatic aggregation," MOC is "a map a human curated."
+Theme-based entry points go **by hand** in `00_Intranet/MOC/<theme>.md` (a zone the AI never auto-generates into). Examples: "Anime Library," "Relationship Map," "Self-Understanding Map." If a `base` block is "automatic aggregation," MOC is "a map a human curated."
 
 ---
 

@@ -1541,7 +1541,7 @@ async function changeStatus(tid, newStatus, isUndo) {
     time: timeStr(),    // HH:MM（先延ばし実験・時刻粒度のトラッキング用。2026-08-18）
   };
   try {
-    const r = await fetch(')/queue', {
+    const r = await fetch('/queue', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: 'task_status_change', payload }),

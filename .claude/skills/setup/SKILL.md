@@ -1,6 +1,6 @@
 ---
 name: setup
-description: 初回セットアップ。Identity・価値観・Areas・AGENTS.mdのパス設定・Obsidianプラグイン案内・自動化スクリプト生成をヒアリングで完結させる。「セットアップ」「初期設定」「/setup」で起動。ファイルを直接編集しなくても設定が完了する。
+description: 初回セットアップ。Identity・価値観・Areas・AGENTS.mdのパス設定・自動化スクリプト生成をヒアリングで完結させる。「セットアップ」「初期設定」「/setup」で起動。ファイルを直接編集しなくても設定が完了する。
 ---
 
 # 🚀 初回セットアップ（対話型）
@@ -17,10 +17,9 @@ Phase 2: 基本プロフィール（Identity.md）
 Phase 3: 価値観・原則（哲学・価値観.md）
 Phase 4: 生活領域（05_Areas/ にハブファイルを作成）
 Phase 5: パス設定（AGENTS.md の <WORKSPACE> 等を置換）
-Phase 6: Obsidian プラグイン設定（インタラクティブ案内）
-Phase 7: 自動化スクリプト（任意・.ps1 生成）
-Phase 8: 専門エージェント（任意）
-Phase 9: 完了サマリー
+Phase 6: 自動化スクリプト（任意・.ps1 生成)
+Phase 7: 専門エージェント（任意）
+Phase 8: 完了サマリー
 ```
 
 各フェーズは**1〜2問ずつ**。一気に全項目を聞かない。
@@ -58,11 +57,10 @@ Phase 9: 完了サマリー
 2. 価値観・原則（哲学・価値観.md）
 3. Areas（追加・変更・削除）
 4. パス設定（AGENTS.md）
-5. Obsidianプラグイン設定
-6. 自動化スクリプト
-7. 専門エージェント
+5. 自動化スクリプト
+6. 専門エージェント
 ```
-番号を答えてもらい、選んだフェーズ（Phase 2〜8 の対応箇所）だけを実行する。「全部」と言われた場合は Phase 2〜8 を順番に流す。
+番号を答えてもらい、選んだフェーズ（Phase 2〜7 の対応箇所）だけを実行する。「全部」と言われた場合は Phase 2〜7 を順番に流す。
 
 ---
 
@@ -142,59 +140,11 @@ filters:
 - `<LOCAL_AI_DIR>` — Ollama スクリプトのフォルダ（使わない場合は該当行ごと削除を提案）
 - `<HOME>` — ホームディレクトリ（例: `C:\Users\username`）
 
-**使う予定なし** → プレースホルダーをそのまま残す（後の Phase 7 でスクリプト生成時に設定可）。
+**使う予定なし** → プレースホルダーをそのまま残す（後の Phase 6 でスクリプト生成時に設定可）。
 
 ---
 
-## Phase 6: Obsidian プラグイン設定（インタラクティブ案内）
-
-Obsidian の設定は GUI 操作が必要なため、Claude Code が代わりに行うことはできない。
-ただし**手順を1ステップずつ案内**し、完了したら次へ進む形で完結させる。
-
-> 「Obsidian を開いてください。プラグイン設定を一緒に進めます。」
-
-### ステップ 1: プラグイン有効化の確認
-Obsidian でこの vault を開くと、リポに含まれる `.obsidian/community-plugins.json` から「Templater / Obsidian Linter を有効化しますか？」と自動で聞いてくれる。
-→ 「有効化しました」と言ってもらったら次へ。
-
-### ステップ 2: Templater 設定（自動日付挿入に必須）
-```
-設定 → Templater
-  ・Template folder location: _Templates
-  ・Trigger Templater on new file creation: ON
-  ・Folder templates:
-    04_Tasks/タスク管理/タスク  → _Templates/タスク.md
-    07_Logs/ログ              → _Templates/ログ.md
-    06_Resources/Resources/ナレッジ → _Templates/ナレッジ.md
-    01_Inbox/インボックス      → _Templates/インボックス.md
-```
-→ 「設定しました」と言ってもらったら次へ。
-
-### ステップ 3: Obsidian Linter 設定（`updated` 自動更新）
-```
-設定 → Linter → YAML → YAML Timestamp を ON
-  ・Date Created Key: created
-  ・Date Modified Key: updated
-  ・Date Format: YYYY-MM-DD
-  ・Insert on file creation: ON
-  ・Update on file modification: ON
-```
-→ 「設定しました」と言ってもらったら次へ。
-
-### ステップ 4: Files & Links 設定
-```
-設定 → Files & Links
-  ・Default location for new notes: 01_Inbox/インボックス
-  ・New link format: Relative path to file
-  ・Automatically update internal links: ON
-```
-
-設定完了したら Phase 7 へ。
-スキップしたい場合は「後で」と言えば省略可（詳細は `docs/OBSIDIAN-SETUP.md`）。
-
----
-
-## Phase 7: 自動化スクリプト（任意）
+## Phase 6: 自動化スクリプト（任意）
 
 > 「朝のスタンドアップ・夜間QAをスケジュール自動化しますか？スクリプトを生成します。（任意）」
 
@@ -229,7 +179,7 @@ claude -p "@orchestrator 01_Inbox/ の未処理ファイルを振り分け・プ
 
 ---
 
-## Phase 8: 専門エージェント（任意）
+## Phase 7: 専門エージェント（任意）
 
 > 「コア3体（orchestrator / knowledge / infrastructure）に加えて専門エージェントを追加しますか？例：家計管理・語学学習・リサーチ・関係整理など。（スキップ可）」
 
@@ -237,7 +187,7 @@ claude -p "@orchestrator 01_Inbox/ の未処理ファイルを振り分け・プ
 
 ---
 
-## Phase 9: 完了サマリー
+## Phase 8: 完了サマリー
 
 設定した内容を箇条書きで報告：
 
@@ -249,7 +199,6 @@ claude -p "@orchestrator 01_Inbox/ の未処理ファイルを振り分け・プ
 - 哲学・価値観.md（価値観定義・行動原則）
 - Areas: 仕事 / 健康 / 英語学習（ハブファイル作成済み）
 - AGENTS.md パス設定（<WORKSPACE> 置換済み）
-- Obsidian プラグイン：Templater / Linter / Files & Links 設定済み
 - 自動化スクリプト：vault-scripts/ に生成済み（Task Scheduler 登録は手動）
 - 専門エージェント：finance（家計管理）
 

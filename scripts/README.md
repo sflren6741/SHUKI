@@ -1,6 +1,6 @@
 # Scripts
 
-These scripts run the local dashboard, fetch news and check vault structure. If you use only Obsidian and Claude Code, you can leave this folder alone. See the [main README](../README.en.md) for an overview.
+These scripts run the local dashboard, fetch news and check vault structure. If you only use Claude Code's terminal chat and never start the dashboard, you can leave this folder alone. See the [main README](../README.en.md) for an overview.
 
 ## Dashboard
 
@@ -17,7 +17,7 @@ Open <http://127.0.0.1:8765/>. If the vault is elsewhere, replace `(Get-Location
 
 `SHUKI_DATA_DIR` optionally sets an absolute directory for runtime data outside the code tree. Fresh installations create their stores there. Existing installations keep populated legacy stores until an explicit migration. Decision records and response history belong to those runtime stores, not the public package.
 
-The core uses the Python standard library and can start without a personal profile or Google account. AI chat needs the selected Claude Code or Codex CLI installed and configured. To connect Google Calendar, install:
+The core needs PyYAML (`pip install pyyaml`) and otherwise uses the Python standard library. It can start without a personal profile or Google account. AI chat needs the selected Claude Code or Codex CLI installed and configured. To connect Google Calendar, install:
 
 ```sh
 pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib

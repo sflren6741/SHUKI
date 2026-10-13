@@ -1,75 +1,64 @@
-# Mobile sync — Android + Obsidian + FolderSync
+# Mobile access — reach the dashboard from your phone
 
-> **TL;DR (EN)** — Your vault lives in a cloud folder (e.g. Google Drive) on desktop. On Android, **FolderSync** mirrors that cloud folder to a *local* folder, and the Obsidian Android app opens the local folder as a vault. Use two-way sync, sync before and after you edit, and you can capture/read anywhere. This is one known-good recipe — swap the cloud backend or sync tool to taste.
+> **TL;DR** — The dashboard only listens on `127.0.0.1` on the PC for security reasons (opening it to the whole LAN exposed an admin-level exec route in testing). Reach it from your phone over **Tailscale**: install Tailscale on both devices, enable **Tailscale Serve** on the PC to put an HTTPS front on port 8765, then open that HTTPS URL on your phone and optionally "Add to Home Screen" (PWA) for an app-like icon and push notifications.
 
-On the PC side, keep the vault in a cloud-synced folder (e.g. Google Drive). On Android, **FolderSync** mirrors that cloud folder to a **local folder**, and Obsidian Android opens that local folder as a vault. This lets you capture and browse while out and about.
-
-> ⚠️ This is "one recipe that works." Feel free to swap the cloud backend (Google Drive / Dropbox / OneDrive...) or sync tool (FolderSync / Syncthing / Obsidian Sync / git) to your taste. The one thing that's constant is that Obsidian Android **can only open a local folder as a vault**, so you need some kind of cloud-to-local mirror.
+The vault itself is just local Markdown files — no sync tool or viewer app is required. What you use from your phone is the **dashboard** (a browser screen), which connects to the `dashboard_server.py` process running on your PC.
 
 ---
 
-## The shape
+## Why Tailscale
 
-```
-[PC]  vault = a cloud-synced folder (under Google Drive for Desktop, etc.)
-                     ⇅ cloud (Google Drive)
-[Android]  FolderSync: cloud folder ⇄ local device folder
-                     ↓
-           Obsidian Android: opens the local folder as a vault
-```
+The dashboard listens only on `127.0.0.1:8765` on the PC. Binding it to `0.0.0.0` exposed `/exec` (an unauthenticated Claude-launch route) to anyone on the LAN in testing. For a safe cross-device connection, use Tailscale (or a similar personal VPN mesh), and restrict the PC's firewall so only Tailscale's address range (`100.64.0.0/10`) can reach port 8765.
 
 ---
 
 ## Steps
 
-### 1. PC side
-- Put the vault inside a cloud-synced folder (e.g. under Google Drive for Desktop's My Drive).
-- Confirm the vault folder has synced up to the cloud.
+### 1. Install Tailscale on both the PC and your phone
 
-### 2. Android — FolderSync
-1. Install **FolderSync** (free) or FolderSync Pro from the Play Store.
-2. **Accounts** → add and authenticate your cloud provider (Google Drive, etc.).
-3. **Folderpairs** → create new:
-   - **Sync type**: two-way
-   - **Remote folder**: the vault folder in the cloud
-   - **Local folder**: any folder on the device (e.g. `/storage/emulated/0/Obsidian/MyVault`)
-   - **Sync options**: enable "Sync on schedule" (e.g. every 15–30 min) + "Sync when files change"
-   - **Conflict rule**: your preference, e.g. "Use most recent file" (see the caution below too)
-4. Run a manual sync once and confirm the vault lands locally.
+Install from [tailscale.com](https://tailscale.com/) and sign in to the same account on both devices so they join the same tailnet.
 
-### 3. Android — Obsidian
-1. Install Obsidian Android.
-2. **Open folder as vault** → select FolderSync's **local folder**.
-3. Set up plugins (Templater, etc.) per device (it's safest to exclude `.obsidian/` from syncing — see below).
+### 2. Lock down the PC firewall (one-time, admin privileges)
+
+Run the repo's `scripts/setup_tailscale_firewall.ps1` in an elevated PowerShell. It creates a rule that only allows inbound connections to port 8765 from Tailscale's address range.
+
+### 3. Enable Tailscale Serve on the PC
+
+```
+tailscale serve https / http://127.0.0.1:8765
+```
+
+This forwards HTTPS traffic to the PC's Tailscale hostname into the local dashboard at `127.0.0.1:8765`. Check the hostname with `tailscale status`.
+
+### 4. Keep the dashboard running
+
+On the PC, as usual:
+
+```powershell
+$env:SHUKI_VAULT = (Get-Location).Path
+python scripts/dashboard_server.py
+```
+
+### 5. Open it in your phone's browser
+
+Visit `https://<your PC's Tailscale hostname>/`. The task board, calendar, news, AI chat and decision cards all work the same as on desktop.
+
+💡 **Add to Home Screen (PWA)**: use your browser's share menu to add it to your home screen for an app-like icon. Where supported, you'll also get push notifications (Web Push).
 
 ---
 
-## Avoiding conflicts
+## Capturing ideas on the go
 
-The biggest enemy of two-way sync is **conflicts from simultaneous editing**. Practical tips:
-
-- Get in the habit of syncing manually **once before editing and once after** (especially when moving between PC and phone).
-- Don't leave one device open while editing on the other.
-- Enabling FolderSync's **instant sync (change-triggered sync)** reduces conflicts.
-- It's safe to **exclude** `.obsidian/` (Obsidian settings/cache) and `.git/` from syncing. In FolderSync's Folderpair → Filters, exclude `.obsidian` / `.git` / `.trash`. Assume these are per-device settings (this repo also gitignores `.obsidian/`).
-- Commit important changes to git beforehand, so you can roll back in the worst case.
-
----
-
-## Capturing on the go
-
-- Just drop a new note into `01_Inbox/Inbox/` whenever an idea strikes. Once you're back at your PC, `@orchestrator` routes it.
-- Placing Obsidian's "new note" widget/shortcut on your Android home screen makes capturing instant.
-- Sharing a URL to `01_Inbox` from the share menu is also handy (add `type: 🔗URL` and the knowledge agent will turn it into a knowledge note).
+- Just type what's on your mind into the dashboard's AI chat. `@orchestrator` routes it to the right place.
+- To capture by voice, use the `/voice-capture` skill to save what you say straight to the inbox.
+- Paste a URL from your phone's share menu into chat and the `knowledge` agent turns it into a note.
 
 ---
 
 ## Alternatives
 
-| Method | Notes |
+| Approach | Notes |
 |---|---|
-| **Obsidian Sync** (official, paid) | Smartest conflict resolution. Settings sync too. Trading money for convenience |
-| **Syncthing** | P2P, no cloud middleman. Privacy-focused |
-| **git** (manual push/pull) | Keeps history, but fiddly to operate on mobile |
-| **FolderSync** (this guide) | Cloud-based, free to start, keeps a real local copy on the device |
-</content>
+| **Tailscale Serve** (this guide) | Free tier is enough to start. Only reachable while the PC is on |
+| **Your own reverse proxy + certificate** | Works if you want to manage TLS termination yourself; more setup |
+| **An always-on dashboard on a cloud VPS** | Removes the dependency on your PC being on, but means deciding to put vault data on that VPS — this repo isn't built assuming that |

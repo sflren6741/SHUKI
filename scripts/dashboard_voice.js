@@ -459,8 +459,8 @@ class VoiceConversation {
             : 'There is no pending work proposal. Say what you want to do first.';
           this.ui.render(reply, message); this.ui.speak?.(message, language, true); return;
         }
-        const message = started ? 'Confirmed. Starting the approved work.'
-          : 'The work was not started. Check the work card for details.';
+        const message = started ? 'Confirmed. I sent the plan to a new tab.'
+          : 'The plan was not sent. Check the plan card for details.';
         this.ui.render(reply, message); this.ui.speak?.(message, language, true); return;
       }
       if (workCommand === 'cancel') {
@@ -612,34 +612,21 @@ class VoiceConversation {
     return this.request('/voice-work', {method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(data)}, 15000, true);
   }
-  async startWork(approvalMethod = 'click') {
-    if (!this.proposal || this.workStarting || this.work?.status === 'running') return;
+  // An approved plan is sent as an ordinary prompt in a new conversation tab (2026-10-13),
+  // not to the dedicated work panel. The voice conversation stays in its own tab.
+  async startWork() {
+    if (!this.proposal || this.workStarting) return false;
     const proposal = this.proposal;
     this.workStarting = true;
     this.ui.proposal?.({...proposal, starting: true});
-    this.ui.rememberWork?.('source', proposal.id);
     try {
-      const request = {action: 'start', id: proposal.id, approved: true};
-      if (approvalMethod === 'voice') {
-        request.approval_method = 'voice';
-        request.confirmation = VOICE_WORK_CONFIRMATION_TOKENS[this.language];
-      }
-      const data = await this.workRequest(request);
-      this.work = {id: data.job, status: 'running', scope: proposal.summary, model: data.model};
-      this.workSendError = '';
-      this.ui.rememberWork?.('job', data.job);
+      await this.ui.startChat('Carry out this plan, agreed in a voice conversation:\n\n' + proposal.summary);
       this.proposal = null;
       this.ui.proposal?.(null);
-      this.renderWork();
-      this.pollWork();
       return true;
     } catch (error) {
-      // The server makes Start idempotent. A repeated click or voice command checks the same proposal.
-      if (/expired|no longer available/i.test(error.message || '')) this.clearProposal();
-      else {
-        this.proposal = proposal;
-        this.ui.proposal?.({...proposal, error: 'Start could not be confirmed: ' + error.message});
-      }
+      this.proposal = proposal;
+      this.ui.proposal?.({...proposal, error: 'Could not open a new tab: ' + error.message});
       return false;
     } finally { this.workStarting = false; }
   }

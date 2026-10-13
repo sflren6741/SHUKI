@@ -760,7 +760,24 @@ async function loadPreview(pv, path, nested) {
     body.innerHTML = '<span class="pv-err">プレビューを読み込めませんでした: ' + esc(String(e)) + '</span>';
   }
 }
+// ```markmap（入れ子リスト → 整列ツリー型マインドマップ・2026-10-13）。描画本体は対話ドックと共用の
+// /assets/shuki-markmap.js で、ブロックがあるプレビューを開いた時だけ読み込む。
+let _pvMarkmapLoading = null;
+function renderMarkmap(root) {
+  if (!root.querySelectorAll('pre.markmap').length) return;
+  if (!_pvMarkmapLoading) {
+    _pvMarkmapLoading = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = '/assets/shuki-markmap.js';
+      s.onload = resolve;
+      s.onerror = () => { _pvMarkmapLoading = null; reject(new Error('shuki-markmap.js failed to load')); };
+      document.head.appendChild(s);
+    });
+  }
+  _pvMarkmapLoading.then(() => window.shukiRenderMarkmaps(root)).catch(e => console.warn('markmap:', e));
+}
 function renderMermaid(root) {
+  renderMarkmap(root);
   const nodes = [...root.querySelectorAll('pre.mermaid')];
   if (!nodes.length) return;
   // 構文エラー時、mermaid.run()はreject/catchでなく「Syntax error in text」のエラーSVGを

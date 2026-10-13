@@ -1,6 +1,6 @@
 # Setup — reproduce this system
 
-> **TL;DR** — Install three tools (Git, Claude Code, Obsidian), download this repo, then launch `claude` in a terminal and type `/setup`. Everything else gets configured through chat. You never need to edit a file directly.
+> **TL;DR** — Install two tools (Git, Claude Code), download this repo, then launch `claude` in a terminal and type `/setup`. Everything else gets configured through chat. You never need to edit a file directly. Day-to-day use happens through the SHUKI dashboard, which you start in your browser after setup.
 >
 > **Rough time estimate**: about 10–15 minutes of manual work + about 10–15 minutes of interactive `/setup` conversation.
 
@@ -10,21 +10,21 @@ This page is written so it's self-contained — each step includes a light expla
 
 ## 0. Three prerequisites, in short
 
-- **Claude Code** … the "brain" of this system. An AI that runs in a terminal (a black screen) and does all the file creation, organizing, and automation. **Your main interface.**
-- **Obsidian** … a "viewer/DB" for Markdown files. Used for the graph view, tables (Bases), and reading notes. Not the primary tool for editing.
+- **Claude Code** … the "brain" of this system. An AI that runs in a terminal (a black screen) and does all the file creation, organizing, and automation. Requires a paid account (no free tier).
+- **SHUKI dashboard** … a browser-based screen for tasks, calendar, news and AI chat. **This is where day-to-day use happens.**
 - **Git** … a tool for downloading this repo (template). You'll only use it once.
 
-> In short: "write and organize with Claude Code → browse with Obsidian."
+> In short: "Claude Code writes and organizes behind the scenes → you operate through the dashboard."
 
 ---
 
 ## 1. Prerequisites (manual, human work — ~15 min)
 
-**This is the only manual part.** Install four tools, place the repo, and get as far as launching `claude`.
+**This is the only manual part.** Install two tools, place the repo, and get as far as launching `claude`.
 
 ### ① Install Git (to fetch the repo)
 
-Used to `git clone` this repo. A ZIP download also works (see the alternative in step ④).
+Used to `git clone` this repo. A ZIP download also works (see the alternative in step ③).
 
 | OS | How to install |
 |---|---|
@@ -45,17 +45,7 @@ Official instructions: <https://docs.claude.com/en/docs/claude-code/overview>
 
 💡 After installing, if `claude --version` shows something in the terminal, it worked.
 
-### ③ Install Obsidian (the viewer)
-
-Official site: **<https://obsidian.md/>** → download the build for your OS from "Get Obsidian / Download" and run it.
-
-- Windows: run the `.exe` → click through to finish
-- Mac: open the `.dmg` and drag Obsidian into Applications
-- Free for personal use. No account required.
-
-💡 A "vault" is the term for "one folder full of notes" managed by Obsidian. The folder you create in step ④ becomes that vault.
-
-### ④ Download this repo (place the template locally)
+### ③ Download this repo (place the template locally)
 
 In a terminal, navigate to wherever you want to keep your notes, then run:
 
@@ -74,17 +64,7 @@ This creates a folder called `my-vault` containing the whole template. You can r
 
 Either way, **accept the invitation first** via the link in the invitation email.
 
-### ⑤ Open it in Obsidian as a vault
-
-1. Launch Obsidian
-2. Choose "**Open folder as vault**"
-   - Either on the first-launch screen, or via the vault-switcher icon in the bottom-left → "Open folder as another vault"
-3. Select the `my-vault` folder you created in ④
-4. If asked "Trust author and enable plugins?" choose **Trust** (to use the bundled plugins)
-
-💡 Right after opening, you may be asked "Enable community plugins?" `/setup` will walk you through this, so it's fine to enable them now for a smoother flow (you can also do it later).
-
-### ⑥ Launch `claude` from the vault folder
+### ④ Launch `claude` from the vault folder
 
 In a terminal, navigate to the vault folder and start Claude Code:
 
@@ -115,11 +95,8 @@ From there, Claude Code will **ask you questions** (1–2 at a time) and configu
 | Philosophy & Values.md (values, principles) | Defines the values you care about | Just answer the questions |
 | Areas (life-area hubs) | Auto-creates area files like "Work," "Health," etc. | Just name the areas |
 | Path settings in CLAUDE.md | Auto-replaces `<WORKSPACE>` etc. with real paths | Just answer with your paths |
-| Obsidian plugin configuration | Walks you through Templater/Linter etc. step by step | GUI clicks on your end (see below) |
 | Automation scripts (optional) | Generates `.ps1` files for morning/night runs | Just say yes or no |
 | Specialized agents (optional) | Adds your own AI for finance, language learning, etc. | Just describe the role |
-
-> ⚠️ **Only the Obsidian plugin setup requires GUI interaction** (Claude can't click the screen directly). But it guides you step by step ("Settings → ◯◯ → turn on △△"), so you won't need to go searching. For more detail, see [OBSIDIAN-SETUP.md](OBSIDIAN-SETUP.md).
 
 💡 You don't have to do everything at once. **Skipping automation (optional)** is fine — the system still works normally. It's best to just fill in Identity and Areas first, start using it, and expand once you're comfortable.
 
@@ -127,9 +104,17 @@ From there, Claude Code will **ask you questions** (1–2 at a time) and configu
 
 ## 3. What you can do after setup
 
-**Start by just talking to it.** Say "Add a note: ..." and it lands in the inbox; "Make it a task" turns it into a task. When you're stuck, `/next` gives you the one next action.
+**Start by launching the dashboard.** From the vault folder root:
 
-The main interface remains **Claude Code (chat)** throughout. Think of Obsidian as view-only.
+```powershell
+pip install pyyaml   # first time only
+$env:SHUKI_VAULT = (Get-Location).Path
+python scripts/dashboard_server.py
+```
+
+Open <http://127.0.0.1:8765/> in your browser — tasks, calendar, news and AI chat are all on one screen. **This is where day-to-day use happens.** Claude Code is running behind the scenes, but the screen itself is just the dashboard.
+
+You can also talk directly to Claude Code's terminal chat. Say "Add a note: ..." and it lands in the inbox; "Make it a task" turns it into a task. When you're stuck, `/next` gives you the one next action. For deeper research or file reorganizing, talking to Claude Code directly is often faster.
 
 ```
 # Throw anything at the inbox (Claude figures out where it goes)
@@ -155,10 +140,9 @@ The main interface remains **Claude Code (chat)** throughout. Think of Obsidian 
 | Symptom | Fix |
 |---|---|
 | `claude` says "command not found" | Step ② isn't finished. Restart the terminal and check `claude --version` |
-| `git` not found | Step ① isn't installed. Or download the ZIP instead (step ④) |
-| `git clone` fails with `Repository not found` | The repository is private and you were invited to it. Accept the invitation, then use the 🔒 route in step ④ (ZIP, or `gh auth login`) |
-| Dates aren't auto-filling in Obsidian notes | Plugins aren't configured yet. Use `/setup`'s plugin guide, or run through [OBSIDIAN-SETUP.md](OBSIDIAN-SETUP.md) |
-| Not sure if it's safe to enable a plugin | This repo is framework-only, with no personal data. Safe to Trust |
+| `git` not found | Step ① isn't installed. Or download the ZIP instead (step ③) |
+| `git clone` fails with `Repository not found` | The repository is private and you were invited to it. Accept the invitation, then use the 🔒 route in step ③ (ZIP, or `gh auth login`) |
+| Can't reach the dashboard in a browser | Check that the terminal running `python scripts/dashboard_server.py` is still open. Requires Python 3.11+ |
 | Garbled text / hard to read Japanese | The framework is written in Japanese by default. Feel free to translate/localize the rule files |
 
 ---
@@ -167,11 +151,10 @@ The main interface remains **Claude Code (chat)** throughout. Think of Obsidian 
 
 | Doc | When to read it |
 |---|---|
-| [OBSIDIAN-SETUP.md](OBSIDIAN-SETUP.md) | When you want to configure plugins manually in detail |
 | [AGENTS.md](AGENTS.md) | When you want to understand how agents work and how to build your own |
 | [AUTOMATION.md](AUTOMATION.md) | When you want to set up morning/night automation (Task Scheduler registration, etc.) |
 | [TIPS.md](TIPS.md) | When you want to understand type-driven PARA, wikilinks, and concept nodes |
-| [MOBILE-SYNC.md](MOBILE-SYNC.md) | When you want to sync with your phone (Android) |
+| [MOBILE-SYNC.md](MOBILE-SYNC.md) | When you want to reach the dashboard from your phone |
 
 > This repo isn't "the right answer" — it's a **starting point**. The more you grow it to fit your own thinking, the better it works.
 </content>

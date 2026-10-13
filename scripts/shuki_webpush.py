@@ -18,7 +18,9 @@ import shuki_paths
 ASSETS = Path(__file__).resolve().parent / "dashboard_assets"
 CSRF_TOKEN = secrets.token_urlsafe(32)
 MAX_DEVICES = 8
-REPLY_TTL = 3600
+# Delivered notifications remain in Android's tray after their delivery TTL.
+# Keep the exact-choice capability usable for a day; current-turn checks still apply.
+REPLY_TTL = 24 * 3600
 
 
 def state_file(name):

@@ -57,12 +57,13 @@ _DEFAULTS = {
     "code_cli": "",
     "stt_venv_python": "",
     "stt_script": "",
+    "kokoro_dir": "",
 }
 
 # 値が無い（キー自体を省略、または null）場合に None を返してよいキー。
 # 対応する機能（音声入力・VS Codeで開く・メッセージ取込）は、公開版では動かなくてよい
 # ＝存在しないパスでも壊れない設計に各呼び出し元がなっている前提。
-_OPTIONAL_KEYS = {"code_cli", "stt_venv_python", "stt_script", "message_base"}
+_OPTIONAL_KEYS = {"code_cli", "stt_venv_python", "stt_script", "message_base", "kokoro_dir"}
 
 
 def _load_overrides():
@@ -303,6 +304,7 @@ MESSAGE_BASE = get_path("message_base")
 CODE_CLI = get_path("code_cli")
 STT_VENV_PYTHON = get_path("stt_venv_python")
 STT_SCRIPT = get_path("stt_script")
+KOKORO_DIR = get_path("kokoro_dir")  # kokoro-v1.0.onnx + voices-v1.0.bin (English neural TTS)
 
 
 # ── Code-tree runtime stores (Phase A, 2026-10-07) ─────────────────────────

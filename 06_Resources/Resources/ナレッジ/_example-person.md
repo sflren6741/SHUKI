@@ -9,7 +9,7 @@ date: 2026-01-15
 # <相手の名前>
 
 > 👤 人物ノート。**あなたに関わる人の事実をここに1ファイルで集約する。**
-> ログや振り返りの frontmatter に `person: "[[<相手の名前>]]"` と書くと、Obsidian の backlinks パネルにこの人の登場箇所が自動で集まる。
+> ログや振り返りの frontmatter に `person: "[[<相手の名前>]]"` と書くと、この wikilink をキーにこの人の登場箇所を検索・集約できる。
 > 👤 A "person note": one file per person, holding facts about someone in your life. Reference it from logs via `person: "[[name]]"` and backlinks aggregate everything automatically.
 
 <!-- この空ファイルが「人間関係も Resources で管理できる」ことを示す最小例です。理解したら削除OK。
