@@ -75,6 +75,7 @@ import dashboard_files   # noqa: E402  (📁 ファイルページ。GET /files�
 import dashboard_news    # noqa: E402  (📰 ニュースページ。GET /news。news_fetch.py が生成する日次JSONを表示するだけ)
 import dashboard_calendar  # noqa: E402  (📅 カレンダーページ。GET /calendar。GCal APIを都度呼び、既存 memo キューでメモを回収)
 import calendar_utils      # noqa: E402  (Google Calendar 認証済みクライアント。get_events() をカレンダーページが使用)
+import dashboard_chat_actions  # noqa: E402  (対話パネルのアクションカード。POST /chat/action。押した時だけ予定登録／タスク起票)
 # ＝姉妹ページ /finance・/trading とはナビのポップオーバーで束ねる。2026-08-20新設・08-21 タブ集約を解体)
 import dashboard_file_links  # noqa: E402  (共有の /files ルートと URL エンコード)
 import dashboard_icons    # noqa: E402  (ナビ・称号ランクの線アイコンSVG単一情報源)
@@ -259,6 +260,32 @@ def _resolve_codex_cmd():
 
 
 CODEX_CLI_CMD = _resolve_codex_cmd()
+# Windows の CreateProcess はコマンドライン全体が 32,767 文字まで。音声会話は人格・音声スキル・
+# 参照抜粋を毎ターン連結するので、参照の2巡目でこれを超えて WinError 206（ファイル名または
+# 拡張子が長すぎます）で落ちた（2026-10-14 実機）。引用符のエスケープ分の余裕を見てこの長さを
+# 超えたらプロンプトを標準入力で渡す（claude -p も codex exec の "-" も stdin を読む）。
+CLI_ARGV_SAFE_CHARS = 24000
+
+
+def _popen_cli(cmd, prompt_index, stdin_marker=None, **kwargs):
+    """CLI を起動する。長すぎるプロンプトは argv から外して stdin で渡す。
+
+    stdin_marker が None なら argv から削除（claude -p）、文字列ならその値に置換（codex の "-"）。
+    """
+    if len(subprocess.list2cmdline(cmd)) <= CLI_ARGV_SAFE_CHARS:
+        return subprocess.Popen(cmd, stdin=subprocess.DEVNULL, **kwargs)
+    prompt = cmd[prompt_index]
+    argv = cmd[:prompt_index] + ([] if stdin_marker is None else [stdin_marker]) + cmd[prompt_index + 1:]
+    proc = subprocess.Popen(argv, stdin=subprocess.PIPE, **kwargs)
+
+    def feed():
+        try:
+            proc.stdin.write(prompt)
+            proc.stdin.close()
+        except (OSError, ValueError):
+            pass  # 子プロセスが先に終了した＝結果側のエラーとして拾われる
+    threading.Thread(target=feed, daemon=True).start()
+    return proc
 # ヘッドレス実行（/exec）に時間上限は設けない（2026-08-17 撤廃。10分打ち切りが長考タスクを
 # 中断させ、「結果無し」体験の一因になっていたため。本当にハングした場合はサーバー再起動で
 # 回復する＝再起動時の復元強化（load_transcript フォールバック）とセットで対応）。
@@ -324,6 +351,20 @@ _NTFY_SYSTEM_PROMPT_BASE = _DASHBOARD_REPLY_STYLE + (
     "おすすめがあれば先頭に置き、末尾に（推奨）と付けてよい。"
     "確認や選択が不要な通常の回答では絶対にこれらの行を書かないこと。"
 )
+# アクションカード（2026-10-14）。予定登録・タスク起票の「承認」はボタン1行ではなく、内容を確認・修正できる
+# カードで出す。実行は dashboard_chat_actions がボタン押下時だけ行う（AI はツールで書き込まない）。
+_ACTION_CARD_PROMPT = (
+    " Action cards: when you propose adding events to Google Calendar or creating a task, put one JSON object "
+    "in a fenced ```shuki-action block instead of NTFY_CHOICES. The panel shows an editable card; only the "
+    "user's click executes it, so never write to the calendar or create that task file yourself and never "
+    "claim it was done. Calendar: {\"type\":\"calendar\",\"events\":[{\"title\":\"...\",\"date\":\"YYYY-MM-DD\","
+    "\"start\":\"HH:MM\",\"end\":\"HH:MM\",\"location\":\"\",\"description\":\"\"}]} (omit start/end for "
+    "all-day; up to 12 events; the card checks overlaps itself). Task: {\"type\":\"task\",\"title\":\"...\","
+    "\"area\":\"one SHUKI area or empty\",\"due\":\"YYYY-MM-DD or empty\",\"next_action\":\"...\","
+    "\"completion_criteria\":\"...\",\"parent\":\"project name or empty\",\"reason\":\"...\"}. "
+    "Add \"followup\":true only when you must continue after the click (the result then arrives as the "
+    "user's next message). Use at most one card of each type per reply."
+)
 
 
 def _ntfy_system_prompt(job=None):
@@ -338,7 +379,7 @@ def _ntfy_system_prompt(job=None):
         "completion checks. A follow-up that adds work reopens the session. This line is removed "
         "from the displayed reply. Omit it for JSON-only or other exact-output contracts."
     )
-    return persona + _NTFY_SYSTEM_PROMPT_BASE + status
+    return persona + _NTFY_SYSTEM_PROMPT_BASE + _ACTION_CARD_PROMPT + status
 
 
 def _dashboard_prompt_layers(job, runtime, cli_model):
@@ -3294,7 +3335,8 @@ def load_transcript(session_id, limit=200):
                     continue
                 text = _extract_text(content)
                 if text:
-                    msgs.append({"role": role, "text": _strip_turn_wrappers(text)})
+                    msgs.append({"role": role, "text": _strip_turn_wrappers(text),
+                                 **({"timestamp": d["timestamp"]} if d.get("timestamp") else {})})
     except Exception:
         return []
     return msgs[-limit:]
@@ -3363,7 +3405,8 @@ def load_codex_transcript(thread_id, limit=200):
                 ).strip()
                 if not text or CODEX_INJECTION_RE.match(text):
                     continue
-                msgs.append({"role": role, "text": _strip_turn_wrappers(text)})
+                msgs.append({"role": role, "text": _strip_turn_wrappers(text),
+                             **({"timestamp": d["timestamp"]} if d.get("timestamp") else {})})
     except Exception:
         return []
     return msgs[-limit:]
@@ -4041,9 +4084,9 @@ def _execute_codex_job(job):
         cmd.append(_codex_prompt(job, handoff_ctx, model_spec))
         if job.get("voice") and job.get("cancelled"):
             return "stopped", "Voice reply cancelled before launch"
-        proc = subprocess.Popen(
-            cmd, cwd=str(work_dir), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            stdin=subprocess.DEVNULL, encoding="utf-8", errors="replace", env=_session_tabs_env(job),
+        proc = _popen_cli(
+            cmd, len(cmd) - 1, "-", cwd=str(work_dir), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            encoding="utf-8", errors="replace", env=_session_tabs_env(job),
         )
         with JOB_LOCK:  # /job-stop がこのハンドルを見つけて kill できるようにする
             job["proc"] = proc
@@ -4207,9 +4250,9 @@ def _execute_job(job, config_dir):
         else:
             # 空いている方のアカウントで走らせる（未設定だと常に既定 ~/.claude 固定になる）
             env["CLAUDE_CONFIG_DIR"] = str(config_dir)
-        proc = subprocess.Popen(
-            cmd, cwd=str(work_dir), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            stdin=subprocess.DEVNULL, encoding="utf-8", errors="replace", env=env,
+        proc = _popen_cli(
+            cmd, 2, cwd=str(work_dir), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            encoding="utf-8", errors="replace", env=env,
         )
         with JOB_LOCK:  # /job-stop がこのハンドルを見つけて kill できるようにする
             job["proc"] = proc
@@ -4520,7 +4563,8 @@ def _voice_lookup_turns(job, config_dir, outcome, payload):
 
 def start_job(skill, text, session="", label="", confirm=False, handoff=False, comment="", voice=False,
               work_source="", work_id="", voice_language=DEFAULT_VOICE_LANGUAGE, lookup_source="",
-              english_skill="", english_level="B2", english_assessment="", speaking_practice=""):
+              english_skill="", english_level="B2", english_assessment="", speaking_practice="",
+              background_id="", quiet=False):
     """ジョブ開始。実行中なら busy を返す。戻り値は /exec のレスポンス dict。
 
     session 指定時は既存の会話を継続（--resume）。この場合 text をそのまま
@@ -4608,6 +4652,17 @@ def start_job(skill, text, session="", label="", confirm=False, handoff=False, c
                         {'id': m['id'], 'status': m['status'], 'text': m['text'][:500],
                          'report': m.get('report', '')[:500]} for m in work.get('messages', [])[-5:]]
                     }, ensure_ascii=False)
+            # 音声で承認した作業は別タブの通常会話として走る（2026-10-13）。音声タブで
+            # 「どうなった？」に答えられるよう、そのタブの最新状態を読み取り専用で渡す（2026-10-14）。
+            background = dialogue_job(background_id) if background_id else None
+            if background and not background.get("voice") and not background.get("work"):
+                prompt += "\n\n[Background task status supplied by the dashboard]\n" + json.dumps({
+                    "label": background.get("label", ""), "status": background["status"],
+                    "latest_output": (background.get("result") or background.get("partial") or "")[-3000:],
+                    "snapshot_time": time.time(),
+                    "note": "Runs in a separate conversation tab. Report its progress from this snapshot only. "
+                            "You cannot send it messages; to reply to it, the user opens that tab."
+                }, ensure_ascii=False)
         elif work_source and running_work:
             return {"error": "busy"}
         else:
@@ -4661,6 +4716,8 @@ def start_job(skill, text, session="", label="", confirm=False, handoff=False, c
                    voice_language=voice_language if voice else "")
         if not skill and not voice and not english_skill and not speaking_practice and not job.get("work"):
             job["session_tabs_token"] = secrets.token_urlsafe(32)
+        if quiet:  # 音声会話の中で走る道具つきターン（キャッチアップ等）。本人が画面の前で話している
+            job["silent"] = True
         if english_skill:
             job.update(english_skill=english_skill, english_level=english_level,
                        english_assessment=english_assessment, silent=True)
@@ -7954,7 +8011,9 @@ class Handler(BaseHTTPRequestHandler):
                                                 work_id=qs.get("work", [""])[0],
                                                 voice_language=qs.get("voice_lang", [DEFAULT_VOICE_LANGUAGE])[0],
                                                 lookup_source=qs.get('lookup_source', [''])[0],
-                                                speaking_practice=qs.get('ielts', [''])[0])).encode("utf-8")
+                                                speaking_practice=qs.get('ielts', [''])[0],
+                                                background_id=qs.get("bg", [""])[0],
+                                                quiet=qs.get("quiet", [""])[0] == "1")).encode("utf-8")
                     self._respond(200, body, "application/json; charset=utf-8")
             elif parsed.path == "/job":
                 jid = qs.get("id", [""])[0]
@@ -7975,7 +8034,7 @@ class Handler(BaseHTTPRequestHandler):
                         # ctx/handoff_brief は 2026-08-17 追加（コンテキスト量に応じた
                         # 引き継ぎ提案と、次セッションへ送る依頼文の受け渡し）。
                         payload = {k: job.get(k, "") for k in
-                                   ("id", "status", "result", "session", "model", "partial",
+                                   ("id", "status", "result", "session", "model", "partial", "created_at",
                                     "prompt", "account", "thinking", "choices",
                                    "ctx", "handoff_brief", "cross_engine_handoff", "model_switched",
                                     "proposal",
@@ -7983,7 +8042,7 @@ class Handler(BaseHTTPRequestHandler):
                                     "stop_requested", "context_count", "scope",
                                     "messages", "question", "progress", "activity", "resume_ready", "work_turn",
                                     "voice_relay", "sources", "voice_activity", "lookup_pending",
-                                    "lookup_expires_at", "english_exercise")}
+                                    "lookup_expires_at", "english_exercise", "session_work_status")}
                         if job.get('english_skill'):
                             for private_field in ('partial', 'thinking', 'prompt'):
                                 payload[private_field] = ''
@@ -8442,6 +8501,20 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._respond(200, json.dumps(result).encode("utf-8"),
                               "application/json; charset=utf-8", cache_control="no-store")
+            return
+        if path == "/chat/action":
+            # 対話パネルのアクションカード（予定登録・タスク起票）。AI は提案を書くだけで、
+            # 実行はユーザーがカードのボタンを押したこの経路だけ（GCal書き込みの人間確認）。
+            raw = self._read_body(QUEUE_MAX_BYTES)
+            try:
+                code, result = dashboard_chat_actions.handle(json.loads(raw) if raw else None)
+            except ValueError:
+                code, result = 400, {"error": "invalid JSON"}
+            if code == 200 and result.get("ok") and not result.get("already"):
+                REQ_LOG.append(f"{time.strftime('%m-%d %H:%M:%S')} POST /chat/action -> "
+                               f"{result.get('kind')} {result.get('id') or result.get('path')}")
+            self._respond(code, json.dumps(result, ensure_ascii=False).encode("utf-8"),
+                          "application/json; charset=utf-8", cache_control="no-store")
             return
         if path == "/voice-work":
             data = self._read_body(16000)

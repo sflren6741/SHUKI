@@ -469,6 +469,9 @@ function shukiSessionsRender() {
       title.title = 'Resume ' + item.label;
     }
     row.appendChild(title);
+    var when = document.createElement('span'); when.className = 'sb-session-time';
+    when.textContent = item.updated ? 'Updated ' + item.updated + ' JST' : 'Timestamp unavailable';
+    row.appendChild(when);
     var preview = document.createElement('span'); preview.className = 'hist-summary';
     var savedSummary = item.summary || '';
     var genericSummary = /^(done|completed|ok|okay|yes|no|完了|了解|了解です)[.!。！]?$/i.test(savedSummary.replace(/[*#]/g, '').trim());
@@ -483,7 +486,7 @@ function shukiSessionsRender() {
     summary.title = [summary.textContent, item.updated].filter(Boolean).join(' · ');
     summary.setAttribute('aria-label', 'Details for ' + item.label + ': ' + summary.title);
     details.appendChild(summary);
-    [['hist-when', item.updated], ['hist-turns', item.turns + ' turns'],
+    [['hist-turns', item.turns + ' turns'],
      ['hist-outcome hist-outcome-' + item.outcome, ({running:'Running',ok:'Reply finished',review:'Decision requested',incomplete:'Reply interrupted'})[item.outcome] || 'Reply status unknown'],
      ['hist-request', item.last_request ? 'Last request: ' + item.last_request : ''],
      ['hist-full-summary', item.summary || (item.review_excluded ? 'Preview unavailable for this session.' : 'No saved summary.')]].forEach(function(part) {
@@ -937,7 +940,7 @@ RESPONSIVE_CSS = """
   span.sb-session-title { display:flex; align-items:center; }
   button.sb-session-title { cursor:pointer; }
   .sb-session-details { grid-column:2; grid-row:1; min-width:0; }
-  .sb-session-details[open] { grid-column:1 / -1; grid-row:3; }
+  .sb-session-details[open] { grid-column:1 / -1; grid-row:4; }
   .sb-session-details summary { min-height:44px; display:flex; align-items:center; gap:6px;
     cursor:pointer; color:var(--muted); font-size:.7rem; line-height:1.2; overflow-wrap:anywhere; }
   .sb-session-details summary::after { content:'▾'; margin-left:auto; }
@@ -948,7 +951,9 @@ RESPONSIVE_CSS = """
     white-space:normal; overflow-wrap:anywhere; display:-webkit-box; -webkit-box-orient:vertical;
     -webkit-line-clamp:1; overflow:hidden; line-height:1.5; }
   .sb-session-item .hist-request { color:var(--muted); font-size:.76rem; -webkit-line-clamp:2; }
-  .sb-session-item > .hist-summary { grid-column:1 / -1; grid-row:2; margin-bottom:4px;
+  .sb-session-time { grid-column:1 / -1; grid-row:2; color:var(--muted); font-size:.68rem;
+    line-height:1.5; font-variant-numeric:tabular-nums; }
+  .sb-session-item > .hist-summary { grid-column:1 / -1; grid-row:3; margin-bottom:4px;
     font-size:.72rem; line-height:1.4; -webkit-line-clamp:2; }
   @media (max-width: 700px) { .sb-panel { width:min(280px, 82vw); } }
   /* Claude/Codex 使用量パネル。2026-10-08 にホームからサイドバーへ移した（ホームを書く画面に

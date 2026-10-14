@@ -27,6 +27,8 @@ class VoiceConversation {
     this.lookupApproval = null;
     this.speakingPractice = '';
     this.practiceSendReady = false;
+    this.toolTurns = false;
+    this.background = null;
   }
   state(text) { this.ui.state(text); }
   // A dropped connection (server restart, phone network switch) surfaces as a bare
@@ -145,12 +147,15 @@ class VoiceConversation {
     if (this.noiseSamples.length > 75) this.noiseSamples.shift();
     const levels = [...this.noiseSamples].sort((a, b) => a - b);
     const floor = levels.length ? levels[Math.floor((levels.length - 1) * 0.2)] : 0;
-    const threshold = Math.max(0.025, floor * 2.5);
+    // While a reply is playing, its own echo must not count as the user barging in:
+    // phone speakers leak past echo cancellation and cut replies off mid-sentence.
+    const playing = !!this.ui.isSpeaking?.();
+    const threshold = Math.max(0.025, floor * 2.5) * (playing ? 2 : 1);
     this.ui.level?.(this.muted ? 0 : Math.min(1, rms / (threshold * 2)));
     if (this.muted) { this.loudSince = 0; }
     else if (rms > threshold) {
       if (!this.loudSince) this.loudSince = now;
-      if (now - this.loudSince >= 160) {
+      if (now - this.loudSince >= (playing ? 500 : 160)) {
         this.lastSpeech = now; this.clipSpeech = true;
         if (!this.speaking) {
           this.speaking = true;
@@ -436,14 +441,11 @@ class VoiceConversation {
           return;
         }
       }
-      if (!this.speakingPractice && !lookupSource && !this.proposal && this.ui.catchup
-          && this.isCatchupRequest(text)) {
-        completed = true;
-        this.ui.render(reply, language === 'ja' ? 'キャッチアップに切り替えます。' : 'Switching to the catch-up.');
-        this.ui.catchup();
-        return;
-      }
-      let workCommand = this.speakingPractice ? '' : this.detectWorkCommand(text);
+      // A catch-up stays in this tab and keeps the microphone on (2026-10-14). It needs tools
+      // to read the agenda and record decisions, so its turns run as full replies until it ends.
+      const catchup = !this.speakingPractice && !lookupSource && !this.proposal && this.isCatchupRequest(text);
+      if (catchup) this.toolTurns = true;
+      let workCommand = this.speakingPractice || this.toolTurns ? '' : this.detectWorkCommand(text);
       const shortApproval = !this.speakingPractice && this.confirmation(text) === 'yes';
       if (this.proposal?.awaitingApproval && shortApproval) workCommand = 'start';
       if (this.proposal) this.proposal.awaitingApproval = false;
@@ -459,7 +461,8 @@ class VoiceConversation {
             : 'There is no pending work proposal. Say what you want to do first.';
           this.ui.render(reply, message); this.ui.speak?.(message, language, true); return;
         }
-        const message = started ? 'Confirmed. I sent the plan to a new tab.'
+        const message = started
+          ? 'Confirmed. It’s running in a new tab in the background — we can keep talking here, and I’ll tell you when it’s done.'
           : 'The plan was not sent. Check the plan card for details.';
         this.ui.render(reply, message); this.ui.speak?.(message, language, true); return;
       }
@@ -483,11 +486,17 @@ class VoiceConversation {
       const discussion = this.proposal
         ? text + '\n\nCurrent displayed proposal (reference only; retain unless the user requests a scope change):\n' + this.proposal.summary
         : text;
-      const res = await this.fetchNet('/exec?voice=1&text=' + encodeURIComponent(discussion)
+      const toolTurn = this.toolTurns;
+      const res = await this.fetchNet(toolTurn
+        ? '/exec?skill=' + (catchup && !this.session ? 'catchup' : '')
+          + '&text=' + encodeURIComponent(catchup ? (this.session ? '/catchup' : '') : text)
+          + '&session=' + encodeURIComponent(this.session) + '&label=Voice%20conversation&quiet=1'
+        : '/exec?voice=1&text=' + encodeURIComponent(discussion)
         + '&session=' + encodeURIComponent(this.session) + '&label=Voice%20conversation'
         + '&voice_lang=' + encodeURIComponent(language)
         + '&lookup_source=' + encodeURIComponent(lookupSource)
         + '&work=' + encodeURIComponent(this.speakingPractice ? '' : this.work?.id || '')
+        + '&bg=' + encodeURIComponent(this.speakingPractice ? '' : this.background?.id || '')
         + '&ielts=' + encodeURIComponent(this.speakingPractice));
       const started = await res.json();
       if (!res.ok || started.error) throw new Error(started.error || `HTTP ${res.status}`);
@@ -499,7 +508,7 @@ class VoiceConversation {
       this.ui.model?.(started.model);
       this.job = id;
       if (turn !== this.turn) this.interrupt();
-      const deadline = performance.now() + 180000;
+      const deadline = performance.now() + (toolTurn ? 900000 : 180000);
       const waitingSince = performance.now();
       let waitingNotice = false;
       let dropped = 0;
@@ -535,6 +544,7 @@ class VoiceConversation {
         if (data.session) { this.session = data.session; this.ui.session?.(data.session); }
         if (data.status === 'error') throw new Error(data.result || 'Reply failed');
         completed = true;
+        if (toolTurn && data.session_work_status === 'done') this.toolTurns = false;  // Catch-up finished.
         const interrupted = turn !== this.turn || data.status === 'stopped';
         this.ui.render(reply, interrupted ? 'Interrupted' : (data.result || 'No reply received.'));
         if (!interrupted && data.sources?.length) this.ui.sources?.(reply, data.sources);
@@ -620,15 +630,46 @@ class VoiceConversation {
     this.workStarting = true;
     this.ui.proposal?.({...proposal, starting: true});
     try {
-      await this.ui.startChat('Carry out this plan, agreed in a voice conversation:\n\n' + proposal.summary);
+      const started = await this.ui.startChat('Carry out this plan, agreed in a voice conversation:\n\n' + proposal.summary);
       this.proposal = null;
       this.ui.proposal?.(null);
+      if (started?.job) this.watchBackground(started);
       return true;
     } catch (error) {
       this.proposal = proposal;
       this.ui.proposal?.({...proposal, error: 'Could not open a new tab: ' + error.message});
       return false;
     } finally { this.workStarting = false; }
+  }
+  // The approved plan runs in a background tab; its progress is shown and announced here,
+  // so the voice conversation never has to leave its own tab (2026-10-14).
+  watchBackground({job, tabId, label}) {
+    clearTimeout(this.backgroundTimer);
+    this.background = {id: job, tabId, label: label || 'Voice task', status: 'running'};
+    this.ui.background?.(this.background);
+    this.pollBackground();
+  }
+  async pollBackground() {
+    const background = this.background;
+    if (!background) return;
+    try {
+      const data = await this.request('/job?id=' + encodeURIComponent(background.id), {}, 10000, true);
+      if (background !== this.background) return;
+      background.status = data.status;
+      background.latest = data.status === 'running' ? (data.partial || '') : (data.result || data.partial || '');
+    } catch (error) {
+      if (background !== this.background) return;
+      if (error.message === 'unknown job') background.status = 'unknown';
+    }
+    this.ui.background?.(background);
+    if (background.status === 'running') {
+      this.backgroundTimer = setTimeout(() => this.pollBackground(), 2000);
+      return;
+    }
+    const notice = background.status === 'done' ? 'The background task has finished. Its result is in the other tab.'
+      : background.status === 'unknown' ? 'I lost track of the background task. Check its tab.'
+      : 'The background task ' + background.status + '. Check its tab.';
+    if (this.active) this.notice = notice;
   }
   async pollWork() {
     clearTimeout(this.workTimer);
@@ -712,6 +753,7 @@ class VoiceConversation {
     this.muted = false;
     this.notice = '';
     this.lookupApproval = null;
+    this.toolTurns = false;
     this.active = false; this.epoch++; this.turn++;
     clearInterval(this.tickTimer);
     this.ui.stopSpeak();

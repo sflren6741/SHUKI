@@ -65,6 +65,7 @@ scripts/**
 !scripts/dashboard_board.py
 !scripts/dashboard_calendar.py
 !scripts/dashboard_chat.py
+!scripts/dashboard_chat_actions.py
 !scripts/dashboard_decisions.py
 !scripts/dashboard_facets.py
 !scripts/dashboard_file_links.py

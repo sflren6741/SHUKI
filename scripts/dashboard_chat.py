@@ -20,6 +20,7 @@ import json
 from pathlib import Path
 
 import dashboard_icons
+import dashboard_chat_actions  # アクションカードの Area 選択肢（AREAS）
 import dashboard_mascot
 import dashboard_settings  # モデルごとのeffort設定（model_effort）。ドックのeffortセレクトが参照・更新する
 import model_registry
@@ -37,7 +38,8 @@ MODEL_USAGE_EXEMPT_JSON = json.dumps(model_registry.usage_exempt_dashboard_model
 # 対話ドックの意味的アイコンは dashboard_icons.UI_PATHS を単一情報源にする。
 # HTML の静的部分と JS の動的メッセージの両方が同じ SVG を使うため、ここで一度だけ組み立てる。
 _CHAT_ICON_KEYS = ("play", "stop", "refresh", "speaker", "maximize", "minimize", "shrink", "cross", "attach",
-                   "mic", "mic-off", "send", "hourglass", "check", "comment", "clock", "warn", "pencil", "settings", "copy")
+                   "mic", "mic-off", "send", "hourglass", "check", "comment", "clock", "warn", "pencil", "settings", "copy",
+                   "calendar", "doc")
 
 # The server supplies its existing launcher catalog; the dock owns no duplicate list.
 _skill_catalog_getter = lambda: []
@@ -373,7 +375,9 @@ CSS = r'''
     color:var(--muted); text-decoration:underline; overflow-wrap:anywhere; }
   #result [hidden] { display:none !important; }
   @keyframes pulse { 50% { opacity:.4; } }
-  .msg-actions { display:flex; align-items:center; gap:4px; margin-top:4px; }
+  .msg-actions { display:flex; flex-wrap:wrap; align-items:center; gap:4px; margin-top:4px; }
+  .msg-time { color:var(--muted); font-size:.68rem; line-height:1.5; margin-right:auto;
+    font-variant-numeric:tabular-nums; }
   .msg-copy, .msg-speak { display:inline-flex; align-items:center; justify-content:center; gap:4px;
     min-height:28px; box-sizing:border-box; padding:2px 6px; border:0; border-radius:6px;
     background:none; color:var(--muted); font:inherit; font-size:.74rem;
@@ -487,15 +491,32 @@ CSS = r'''
      （inset -3px）足して 44px。左右は隣と重ならないよう border 分だけ。 */
   /* 入力欄は複数行（2026-10-13）: 1行 40px から内容に合わせて4行（100px）まで伸び、超えたらスクロール。
      伸びてもボタンは下端に揃える（flex-end）。 */
-  .chat-input-row { align-items:flex-end; }
+  /* 入力欄に3つのボタンを内包する（2026-10-14）: 枠そのものを入力欄に見立て、1段目は本文が
+     横幅いっぱい、2段目に ＋（左）・マイク／送信（右）。ボタンは枠線なしで枠の中に収める。 */
+  .chat-input-row { display:grid; grid-template-columns:auto 1fr auto auto; align-items:center;
+    grid-template-areas:"input input input input" "add . mic send"; gap:0 2px; padding:2px 4px;
+    background:var(--surface-control, var(--bg)); border:1px solid var(--control-line, var(--line)); border-radius:14px; }
+  .chat-input-row[hidden] { display:none; }
+  #chat-input { background:transparent; }  /* テーマの入力欄背景（surface-control）は外枠が持つ */
+  .chat-input-row:focus-within { border-color:var(--accent); }
   .chat-input-row > .rbtn { position:relative; flex:0 0 auto; width:40px; height:40px; min-height:40px; padding:0;
-    box-sizing:border-box; display:inline-flex; align-items:center; justify-content:center; }
+    box-sizing:border-box; display:inline-flex; align-items:center; justify-content:center;
+    border-color:transparent; background:transparent; border-radius:10px; }
+  .chat-input-row > .rbtn:hover:not(:disabled) { background:var(--line); }
   .chat-input-row > .rbtn::before { content:''; position:absolute; inset:-3px -1px; }
-  .chat-input-row > textarea { flex:1 1 0; min-width:0; height:40px; min-height:40px; max-height:100px;
-    box-sizing:border-box; resize:none; overflow-y:hidden; line-height:20px; padding:9px 10px;
-    background:var(--bg); border:1px solid var(--line); border-radius:8px; color:var(--fg);
+  .chat-input-row > textarea { grid-area:input; min-width:0; width:100%; height:40px; min-height:40px; max-height:100px;
+    box-sizing:border-box; resize:none; overflow-y:hidden; line-height:20px; padding:9px 6px 3px;
+    background:transparent; border:none; color:var(--fg);
     font-size:.86rem; font-family:inherit; }
-  .chat-input-row > textarea:focus { outline:none; border-color:var(--accent); }
+  .chat-input-row > textarea:focus { outline:none; }
+  #chat-add-btn { grid-area:add; }
+  #voice-btn { grid-area:mic; }
+  #chat-send-btn { grid-area:send; }
+  #chat-send-btn:not(:disabled):not(.stop-mode) { color:var(--accent); }
+  .voice-bg-card .voice-bg-latest { color:var(--muted); font-size:.78rem; margin-top:4px; overflow-wrap:anywhere; }
+  .voice-bg-card .choice-btn { margin-top:8px; min-height:44px; padding:8px 14px; font:inherit; font-size:.82rem;
+    color:var(--fg); background:var(--card); border:1px solid var(--line); border-radius:8px; cursor:pointer; }
+  .voice-bg-card .choice-btn:hover { border-color:var(--accent); }
   .chat-input-row > .rbtn .chat-icon, .result-actions .rbtn .chat-icon { margin:0; display:block; }
   .result-actions .rbtn { display:inline-flex; align-items:center; justify-content:center; gap:3px; }
   .result-actions .rbtn[hidden] { display:none; }
@@ -621,6 +642,39 @@ CSS = r'''
   .choice-btns .choice-send:not(:disabled) { background:var(--accent); border-color:var(--accent);
     color:var(--bg); font-weight:700; }
   .choice-btns .choice-send:hover:not(:disabled) { background:var(--accent); color:var(--bg); filter:brightness(1.08); }
+  /* アクションカード（2026-10-14）: ```shuki-action の予定登録・タスク起票。選択肢カードと同じ面・枠で揃える */
+  .act-card { display:flex; flex-direction:column; gap:8px; margin:10px 0; padding:12px; background:var(--bg);
+    border:1px solid var(--line); border-radius:12px; }
+  .act-head { display:flex; align-items:center; gap:6px; font-size:.86rem; font-weight:700; color:var(--fg); }
+  .act-head svg { color:var(--accent); }
+  .act-row { display:flex; gap:10px; align-items:flex-start; padding:8px 0; border-top:1px solid var(--line); }
+  .act-head + .act-row { border-top:0; }
+  .act-pick { margin-top:10px; accent-color:var(--accent); width:16px; height:16px; flex:none; }
+  .act-main { flex:1 1 auto; min-width:0; display:flex; flex-direction:column; gap:6px; }
+  .act-when { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+  .act-input { box-sizing:border-box; width:100%; min-height:36px; padding:6px 10px; background:var(--card); color:var(--fg);
+    border:1px solid var(--line); border-radius:8px; font:inherit; font-size:.86rem; color-scheme:light dark; }
+  .act-input:focus { outline:none; border-color:var(--accent); }
+  .act-input:disabled { opacity:.7; }
+  .act-date, .act-time { width:auto; }
+  @media (max-width:700px) { .act-when .act-date { flex:1 1 100%; } }
+  .act-dash, .act-allday, .act-sub, .act-flabel { font-size:.76rem; color:var(--muted); }
+  .act-allday[hidden] { display:none; }
+  .act-sub { line-height:1.5; overflow-wrap:anywhere; }
+  .act-status, .act-note { font-size:.76rem; color:var(--muted); display:inline-flex; align-items:center; gap:4px; }
+  .act-warn { color:var(--yellow, #c90); } .act-err { color:var(--red, #d33); } .act-ok { color:var(--green, #3a3); }
+  .act-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:8px; }
+  .act-grid .act-field:first-child, .act-grid .act-field:nth-child(n+4) { grid-column:1 / -1; }
+  .act-field { display:flex; flex-direction:column; gap:3px; }
+  .act-bar { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+  .act-card .act-bar .choice-btn { display:inline-flex; width:auto; min-width:96px; min-height:40px; justify-content:center;
+    align-items:center; padding:8px 14px; font:inherit; font-size:.86rem; color:var(--fg); background:var(--card);
+    border:1px solid var(--line); border-radius:8px; cursor:pointer; }
+  .act-card .act-bar .choice-btn[hidden] { display:none; }
+  .act-card .act-bar .act-go:not(:disabled) { background:var(--accent); border-color:var(--accent); color:var(--bg); font-weight:700; }
+  .act-card .act-bar .choice-btn:disabled { opacity:.5; cursor:default; }
+  .act-card.act-skipped .act-row, .act-card.act-skipped .act-grid { opacity:.55; }
+  .act-card a { color:var(--accent); }
   /* 💬 常設の丸ボタン（2026-08-13 ユーザーの投函メモ）: ホーム以外のページでは対話パネルを開く
      導線がホームの「Claude」チップにしかなく、毎回ホームへ戻る必要があった。全ページの
      右下に常時置き、押せば openChat() でその場から自由入力を始められる。ドックが開いて
@@ -1543,6 +1597,11 @@ JS = r'''
         while (i < lines.length && !FENCE.test(lines[i])) { buf.push(lines[i]); i++; }
         const closed = i < lines.length;  // 閉じ```がまだ来ていない＝ストリーミング中の未完成断片
         if (closed) i++;
+        if (lang === 'shuki-action') {  // アクションカード。閉じるまでは JSON の断片を見せない
+          out.push(closed ? '<pre class="shuki-action" hidden>' + buf.join('\n') + '</pre>'
+                          : '<div class="act-card act-note">' + ACTION_LABELS.preparing + '</div>');
+          continue;
+        }
         out.push((lang === 'mermaid' || lang === 'markmap') && closed
           ? '<pre class="' + lang + '">' + buf.join('\n') + '</pre>'
           : '<pre class="cm-code"><code>' + buf.join('\n') + '</code></pre>');
@@ -1601,6 +1660,199 @@ JS = r'''
     return out.join('');
   }
 
+  // ── アクションカード（2026-10-14）: AI が ```shuki-action（JSON）で提案した予定登録・タスク起票を、
+  // 確認・修正できるカードとして描く。実行はボタンを押した時だけ POST /chat/action（サーバー側）。
+  // 押す行為が人間確認＝GCal書き込みの原則を守ったまま対話内で完結する。二重実行はサーバーが
+  // key（提案本文のハッシュ＋行番号）で防ぎ、履歴を開き直しても「追加済み」で描き直す。
+  // ストリーミング中は同じカードが何度も作り直されるので、問い合わせ結果は ACT_CACHE で使い回す。
+  const ACTION_LABELS = __ACTION_LABELS__;
+  const ACT_AREAS = __ACTION_AREAS__;
+  const ACT_CACHE = new Map();
+  const actHash = s => { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); } return (h >>> 0).toString(16); };
+  const actPost = body => fetch('/chat/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)})
+    .then(r => r.json().then(d => { if (!r.ok || d.error) throw new Error(d.error || ('HTTP ' + r.status)); return d; }));
+  function actCached(id, make) {
+    if (!ACT_CACHE.has(id)) ACT_CACHE.set(id, make().catch(e => { ACT_CACHE.delete(id); throw e; }));
+    return ACT_CACHE.get(id);
+  }
+  function actEl(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+  function actField(label, input) { const f = actEl('label', 'act-field'); f.append(actEl('span', 'act-flabel', label), input); return f; }
+  function actInput(type, value, cls) { const i = actEl('input', cls || 'act-input'); i.type = type; i.value = value || ''; return i; }
+  const actSkipKey = key => 'shuki-act-skip:' + key;
+  function actSetStatus(el, cls, icon, text) {
+    el.className = cls;
+    el.innerHTML = icon ? UI_ICONS[icon] || '' : '';
+    el.append((icon ? ' ' : '') + text);
+  }
+
+  function renderActionCards(el) {
+    el.querySelectorAll('pre.shuki-action').forEach(pre => {
+      const raw = pre.textContent;
+      let spec = null;
+      try { spec = JSON.parse(raw); } catch (_) {}
+      const card = actEl('div', 'act-card');
+      const base = 'a' + actHash(raw);
+      if (spec && spec.type === 'calendar' && Array.isArray(spec.events) && spec.events.length) buildCalendarCard(card, spec, base);
+      else if (spec && spec.type === 'task' && spec.title) buildTaskCard(card, spec, base + ':t');
+      else { card.append(actEl('div', 'act-note', ACTION_LABELS.bad), actEl('pre', 'cm-code', raw)); }
+      pre.replaceWith(card);
+    });
+  }
+
+  function actFrame(card, icon, title) {
+    const h = actEl('div', 'act-head');
+    h.innerHTML = UI_ICONS[icon] || '';
+    h.append(actEl('span', '', title));
+    card.append(h);
+    const bar = actEl('div', 'act-bar');
+    const go = actEl('button', 'choice-btn act-go'); go.type = 'button';
+    const skip = actEl('button', 'choice-btn act-skip', ACTION_LABELS.skip); skip.type = 'button';
+    const note = actEl('span', 'act-note', '');
+    bar.append(go, skip, note);
+    return {bar, go, skip, note};
+  }
+
+  // 「見送る」は端末ごとの表示状態（localStorage）だけ。サーバーには何も残さない＝あとで押し直せる。
+  function actSkippable(card, key, f) {
+    const skipped = () => { card.classList.add('act-skipped'); f.note.className = 'act-note'; f.note.textContent = ACTION_LABELS.skipped; };
+    if (localStorage.getItem(actSkipKey(key))) skipped();
+    f.skip.onclick = () => { localStorage.setItem(actSkipKey(key), '1'); skipped(); };
+    return () => { localStorage.removeItem(actSkipKey(key)); card.classList.remove('act-skipped'); f.note.textContent = ''; };
+  }
+
+  function buildCalendarCard(card, spec, base) {
+    const f = actFrame(card, 'calendar', ACTION_LABELS.cal_head);
+    const rows = spec.events.slice(0, 12).map((ev, i) => {
+      ev = ev || {};
+      const row = actEl('div', 'act-row');
+      const pick = actInput('checkbox', '', 'act-pick'); pick.checked = true;
+      pick.setAttribute('aria-label', ACTION_LABELS.include);
+      const title = actInput('text', ev.title); title.maxLength = 200; title.setAttribute('aria-label', ACTION_LABELS.title);
+      const day = actInput('date', ev.date, 'act-input act-date'); day.setAttribute('aria-label', ACTION_LABELS.date);
+      const start = actInput('time', ev.start, 'act-input act-time'); start.setAttribute('aria-label', ACTION_LABELS.start);
+      const end = actInput('time', ev.end, 'act-input act-time'); end.setAttribute('aria-label', ACTION_LABELS.end);
+      const allDay = actEl('span', 'act-allday', ACTION_LABELS.allday);
+      const syncAllDay = () => { allDay.hidden = !!(start.value || end.value); };
+      [start, end].forEach(inp => inp.addEventListener('input', syncAllDay));
+      syncAllDay();
+      const when = actEl('div', 'act-when');
+      when.append(day, start, actEl('span', 'act-dash', '–'), end, allDay);
+      const main = actEl('div', 'act-main');
+      main.append(title, when);
+      if (ev.location) main.append(actEl('div', 'act-sub', ev.location));
+      if (ev.description) main.append(actEl('div', 'act-sub', ev.description));
+      const status = actEl('div', 'act-status', '');
+      main.append(status);
+      row.append(pick, main);
+      return {key: base + ':' + i, row, pick, status, ev, inputs: [pick, title, day, start, end],
+              value: () => ({title: title.value, date: day.value, start: start.value, end: end.value,
+                             location: ev.location || '', description: ev.description || ''})};
+    });
+    rows.forEach(r => card.append(r.row));
+    card.append(f.bar);
+    const markDone = r => {
+      r.done = true;
+      r.inputs.forEach(x => x.disabled = true);
+      actSetStatus(r.status, 'act-status act-ok', 'check', ACTION_LABELS.added);
+    };
+    const refresh = () => {
+      const left = rows.filter(r => !r.done), picked = left.filter(r => r.pick.checked).length;
+      f.go.textContent = ACTION_LABELS.add + (rows.length > 1 ? ' (' + picked + ')' : '');
+      f.go.disabled = !picked;
+      if (!left.length) { f.go.hidden = f.skip.hidden = true; card.classList.remove('act-skipped'); f.note.textContent = ''; }
+    };
+    rows.forEach(r => r.pick.addEventListener('change', refresh));
+    const unskip = actSkippable(card, base, f);
+    refresh();
+    // 登録済みかを先に確かめ、残りだけ同じ日の既存予定との重なりを見る（読み取りのみ）
+    actCached('status:' + base, () => actPost({op: 'status', keys: rows.map(r => r.key)})).then(d => {
+      rows.forEach(r => { if (d.done && d.done[r.key]) markDone(r); });
+      refresh();
+      const left = rows.filter(r => !r.done);
+      if (!left.length) return;
+      left.forEach(r => { r.status.textContent = ACTION_LABELS.checking; });
+      return actCached('check:' + base, () => actPost({op: 'check', events: left.map(r => r.ev)})).then(c => left.forEach((r, i) => {
+        if (r.done) return;
+        const hits = (c.conflicts || [])[i] || [];
+        if (hits.length) actSetStatus(r.status, 'act-status act-warn', 'warn',
+          ACTION_LABELS.overlap + ': ' + hits.map(h => h.title + ' ' + h.time).join(' / '));
+        else actSetStatus(r.status, 'act-status', '', ACTION_LABELS.nooverlap);
+      }));
+    }).catch(() => rows.forEach(r => { if (!r.done) r.status.textContent = ACTION_LABELS.checkfail; }));
+    f.go.onclick = async () => {
+      f.go.disabled = f.skip.disabled = true;
+      unskip();
+      const added = [];
+      for (const r of rows.filter(r => !r.done && r.pick.checked)) {
+        const v = r.value();
+        try {
+          await actPost({op: 'run', kind: 'calendar', key: r.key, payload: v});
+          markDone(r);
+          added.push(v.title + ' (' + v.date + (v.start ? ' ' + v.start + '–' + v.end : '') + ')');
+        } catch (e) {
+          actSetStatus(r.status, 'act-status act-err', 'warn', ACTION_LABELS.failed + ': ' + e.message);
+        }
+      }
+      ACT_CACHE.delete('status:' + base);
+      f.skip.disabled = false;
+      refresh();
+      if (added.length && spec.followup) sendChoice(ACTION_LABELS.cal_done + ': ' + added.join(', '), f.bar);
+    };
+  }
+
+  function buildTaskCard(card, spec, key) {
+    const f = actFrame(card, 'doc', ACTION_LABELS.task_head);
+    f.go.textContent = ACTION_LABELS.create;
+    const title = actInput('text', spec.title); title.maxLength = 120;
+    const area = actEl('select', 'act-input');
+    ['', ...ACT_AREAS].forEach(a => { const o = actEl('option', '', a || ACTION_LABELS.noarea); o.value = a; area.append(o); });
+    area.value = ACT_AREAS.includes(spec.area) ? spec.area : '';
+    const due = actInput('date', spec.due, 'act-input act-date');
+    const next = actInput('text', spec.next_action); next.maxLength = 300;
+    const crit = actInput('text', spec.completion_criteria); crit.maxLength = 300;
+    const inputs = [title, area, due, next, crit];
+    const grid = actEl('div', 'act-grid');
+    grid.append(actField(ACTION_LABELS.title, title), actField(ACTION_LABELS.area, area), actField(ACTION_LABELS.due, due),
+                actField(ACTION_LABELS.next, next), actField(ACTION_LABELS.done_when, crit));
+    card.append(grid);
+    const parent = String(spec.parent || '').replace(/^\[\[|\]\]$/g, '');
+    if (parent) card.append(actEl('div', 'act-sub', ACTION_LABELS.parent + ': ' + parent));
+    if (spec.reason) card.append(actEl('div', 'act-sub', spec.reason));
+    card.append(f.bar);
+    // 完了条件が空なら human_only で作られる（AGENTS.md ルール5）ことを押す前に見せる
+    const hint = () => { if (!card.classList.contains('act-skipped') && !f.go.hidden) f.note.textContent = crit.value.trim() ? '' : ACTION_LABELS.human_only; };
+    crit.addEventListener('input', hint);
+    const markDone = rec => {
+      inputs.forEach(x => x.disabled = true);
+      f.go.hidden = f.skip.hidden = true;
+      card.classList.remove('act-skipped');
+      actSetStatus(f.note, 'act-note act-ok', 'check', ACTION_LABELS.created + ' ');
+      if (rec.path) {
+        const a = actEl('a', '', ACTION_LABELS.open);
+        a.href = '/files?p=' + encodeURIComponent(rec.path); a.target = '_blank'; a.rel = 'noopener';
+        f.note.append(a);
+      }
+    };
+    const unskip = actSkippable(card, key, f);
+    hint();
+    actCached('status:' + key, () => actPost({op: 'status', keys: [key]}))
+      .then(d => { if (d.done && d.done[key]) markDone(d.done[key]); }).catch(() => {});
+    f.go.onclick = () => {
+      f.go.disabled = f.skip.disabled = true;
+      unskip();
+      const payload = {title: title.value, area: area.value, due: due.value, next_action: next.value,
+                       completion_criteria: crit.value, parent, reason: spec.reason || ''};
+      actPost({op: 'run', kind: 'task', key, payload}).then(rec => {
+        ACT_CACHE.delete('status:' + key);
+        markDone(rec);
+        if (spec.followup) sendChoice(ACTION_LABELS.task_done + ': ' + (rec.path || payload.title), f.bar);
+      }).catch(e => {
+        f.go.disabled = f.skip.disabled = false;
+        actSetStatus(f.note, 'act-note act-err', 'warn', ACTION_LABELS.failed + ': ' + e.message);
+      });
+    };
+  }
+
   // mermaid.js は3MB超あるため全ページ常時読み込みはしない。実際に ```mermaid が
   // メッセージに現れた時だけ /assets/mermaid.min.js を遅延読み込みする（2026-09-26）。
   // 配色は /review のプレビュー図と同じ流儀（/theme.css のCSS変数をそのまま渡す）。
@@ -1636,6 +1888,7 @@ JS = r'''
   // 最新DOMから再取得する（読み込み待ちの間にストリーミングで innerHTML が差し替わっても安全）。
   function renderMermaidIn(el) {
     if (!el || !el.querySelectorAll) return;
+    renderActionCards(el);
     renderMarkmapIn(el);
     if (!el.querySelectorAll('pre.mermaid').length) return;
     loadMermaid(() => {
@@ -1896,7 +2149,25 @@ JS = r'''
     }
     const speaker = el.querySelector('.msg-speak');
     if (speaker && speaker.parentElement !== actions) actions.appendChild(speaker);
+    attachMessageTime(el, actions);
     return actions;
+  }
+
+  function attachMessageTime(el, actions) {
+    let stamp = actions.querySelector('.msg-time');
+    if (!stamp) {
+      stamp = document.createElement('time'); stamp.className = 'msg-time'; actions.prepend(stamp);
+    }
+    const value = el.dataset.timestamp;
+    const date = value ? new Date(value) : null;
+    if (!date || Number.isNaN(date.getTime())) {
+      stamp.removeAttribute('datetime'); stamp.textContent = 'Timestamp unavailable'; return;
+    }
+    stamp.dateTime = date.toISOString();
+    const parts = new Intl.DateTimeFormat('en-GB', {timeZone:'Asia/Tokyo', year:'numeric',
+      month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', hourCycle:'h23'})
+      .formatToParts(date).reduce((out, part) => { out[part.type] = part.value; return out; }, {});
+    stamp.textContent = `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute} JST`;
   }
 
   function copyWithSelection(text) {
@@ -1940,6 +2211,7 @@ JS = r'''
   function addMsg(role, innerHtml, text) {
     const d = document.createElement('div');
     d.className = 'chat-msg ' + role;
+    d.dataset.timestamp = new Date().toISOString();
     d.innerHTML = innerHtml;
     if (typeof text === 'string') attachCopy(d, text);
     activePane().appendChild(d);
@@ -2104,7 +2376,7 @@ JS = r'''
       title.className = 'chat-history-title';
       title.textContent = item.label;
       const detail = document.createElement('small');
-      detail.textContent = [item.updated, MODEL_LABELS[item.model] || item.model,
+      detail.textContent = [item.updated ? 'Updated ' + item.updated + ' JST' : 'Timestamp unavailable', MODEL_LABELS[item.model] || item.model,
         item.running ? 'Running' : item.work_status_label].filter(Boolean).join(' · ');
       button.append(title, detail);
       const summary = document.createElement('span'); summary.className = 'chat-history-summary';
@@ -2533,7 +2805,7 @@ JS = r'''
       msg.textContent = text;
       returnQueue(tab);
     };
-    fetch('/exec?skill=&text=' + encodeURIComponent(sendText) + '&session=' + encodeURIComponent(session)
+    return fetch('/exec?skill=&text=' + encodeURIComponent(sendText) + '&session=' + encodeURIComponent(session)
         + '&label=' + encodeURIComponent(label))
       .then(r => r.json())
       .then(d => {
@@ -2544,12 +2816,14 @@ JS = r'''
         tab.starting = false;
         if (isActive()) reportAutoModel(d.model);
         poll(d.job, msg, tab.id, d.model || '');
+        return {job: d.job, tabId: tab.id, label};
       })
       .catch(e => fail('送信に失敗: ' + e));
   }
 
   // 音声会話で承認した作業は、専用の作業パネルではなく普通の会話タブとして送る（2026-10-13）。
   // switchTab は音声を終了させるので、新タブは裏で開き、音声会話のタブはそのまま残す。
+  // 戻り値（ジョブID）で音声タブ側が進捗を追う（2026-10-14）。
   function startChatInNewTab(label, text) {
     if (TABS.length >= MAX_TABS) throw new Error('All ' + MAX_TABS + ' tabs are in use. Close one, then try again.');
     pushMirrorToTab();
@@ -2559,12 +2833,13 @@ JS = r'''
     const user = document.createElement('div');
     user.className = 'chat-msg user';
     user.innerHTML = mdlite(text);
+    user.dataset.timestamp = new Date().toISOString();
     attachCopy(user, text);
     const msg = document.createElement('div');
     msg.className = 'chat-msg assistant';
     msg.innerHTML = UI_ICONS.loading + ' 実行中…';
     pane.append(user, msg);
-    startFollowup(tab, text, msg);
+    return startFollowup(tab, text, msg);
   }
 
   function sendFollowup() {  // チャット欄からの継続発言（session があれば --resume）
@@ -2600,7 +2875,9 @@ JS = r'''
 
   // ── 音声読み上げ（通常は /tts → <audio>、Voice conversation は端末の en-US 音声） ──
   // /voicevox-stop（PC スピーカー停止）とは別系統。停止はブラウザ内 stopSpeak() で完結する。
-  const TTS_READ_LIMIT = 600;  // 読み上げ上限文字数（文境界でカット。全文読みたければ大きくする）
+  // 読み上げ上限文字数（文境界でカット）。600 では普通の返答も途中で切れていた（2026-10-14）。
+  // 長さは ttsPlain が画面専用の部分を落として先に縮めるので、上限は保険として大きめに取る。
+  const TTS_READ_LIMIT = 4000;
   const ENGLISH_VOICE_PROFILE = Object.freeze({lang:'en-US', rate:0.98, pitch:1.0, volume:1.0});
   const DASHBOARD_DISPLAY_LANGUAGE = __DISPLAY_LANGUAGE__;
   const SILENT_WAV = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=';
@@ -2628,17 +2905,46 @@ JS = r'''
     ttsAudio.play().then(() => { audioUnlocked = true; }).catch(() => {});
   }
 
-  function ttsPlain(t) {  // markdown 記号を落として読み上げ用プレーンテキスト化
-    return t.replace(/```[\s\S]*?```/g, ' ')
-            .replace(/`([^`]*)`/g, '$1')
+  // 読み上げ用プレーンテキスト化（2026-10-14 改修）。画面でしか意味を持たない部分は読まない：
+  // コード・図・表・URL・ファイルパス・ツール実行の状態行・制御行。summary（自動読み上げ）では
+  // さらに Done 節（作業ログ＝ファイル操作の列挙）も飛ばす。メッセージ横のボタンは全文を読む。
+  const TTS_SECTION_LABELS = /^(done|issues|decisionneeded|next|完了|課題|判断が必要|次)$/;
+  // パス＝ドライブ付き・<記号>/~ 始まり・3階層以上・拡張子付きファイル名。「and/or」程度は残す。
+  const TTS_PATH_SRC = String.raw`[A-Za-z]:[\\/][^\s、。,，)）」』]*|[<~][\w-]*>?[\\/][^\s、。,，)）」』]*`
+    + String.raw`|[^\s\\/、。,，()（）「」『』]+(?:[\\/][^\s\\/、。,，()（）「」『』]+){2,}[\\/]?`
+    + String.raw`|[^\s、。,，()（）「」『』]*\.(?:py|js|ts|md|json|jsonl|ps1|css|html|txt|csv|ya?ml|log|png|jpe?g|pdf)(?::\d+)?(?![\w.])`;
+  const TTS_PATH = new RegExp(TTS_PATH_SRC, 'gi');
+  const isTtsPath = s => new RegExp('^(?:' + TTS_PATH_SRC + ')$', 'i').test(s.trim());
+  function ttsPlain(t, opts) {
+    const summary = !!(opts && opts.summary);
+    const out = [];
+    let skipping = false;
+    const lines = String(t || '').replace(/<!--[\s\S]*?-->/g, ' ')
+      .replace(/```[\s\S]*?```/g, '\n').split('\n');
+    for (const line of lines) {
+      const label = line.replace(/[*_#>\s]/g, '').replace(/[:：]$/, '').toLowerCase();
+      if (TTS_SECTION_LABELS.test(label)) { skipping = summary && (label === 'done' || label === '完了'); continue; }
+      if (skipping && !/^#{1,6}\s/.test(line)) continue;
+      skipping = false;
+      if (/^\s*(?:NTFY_\w+|HANDOFF_\w+|VOICE_\w+):/.test(line) || /^\s*\|/.test(line)
+          || /^\s*(?:\*\*)?\s*[🔧💭]/u.test(line) || /^\s*!\[/.test(line)) continue;
+      out.push(line);
+    }
+    return out.join('\n')
+            .replace(/!\[\[[^\]]*\]\]/g, ' ')
+            .replace(/\[\[([^\]|]*\|)?([^\]]*)\]\]/g, (_, __, name) => name.split('/').pop())
+            .replace(/!?\[([^\]]*)\]\([^)]*\)/g, (_, text) => isTtsPath(text) || /^https?:/.test(text) ? ' ' : text)
+            .replace(/`([^`]*)`/g, (_, code) => /[\\/=(){}<>$]|\.\w{1,5}\b/.test(code) ? ' ' : code)
+            .replace(/https?:\/\/[^\s)）]+/g, ' ')
+            .replace(TTS_PATH, ' ')
             .replace(/\*\*?([^*]+)\*\*?/g, '$1')
             .replace(/==([^=]+)==/g, '$1')
             .replace(/\[![a-z]+\][+-]?/gi, '')
-            .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
             .replace(/^#+\s*/gm, '')
-            .replace(/^[-*>]\s+/gm, '')
-            .replace(/https?:\/\/[^\s)]+/g, 'URL')
-            .replace(/[|_~#]/g, ' ');
+            .replace(/^\s*(?:[-*>]|\d+\.)\s+/gm, '')
+            .replace(/[|_~#]/g, ' ')
+            .replace(/[(（]\s*[)）]/g, ' ')
+            .replace(/[ \t]{2,}/g, ' ');
   }
 
   function ttsChunks(t) {  // 文末（。！？!?・改行）で分割し約60字に結合（voicevox_speak.ps1 と同ロジック）
@@ -2654,8 +2960,8 @@ JS = r'''
     return chunks.length ? chunks : [t];
   }
 
-  function limitTtsText(text) {
-    let plain = ttsPlain(text || '').trim();
+  function limitTtsText(text, opts) {
+    let plain = ttsPlain(text || '', opts).replace(/\n{2,}/g, '\n').trim();
     if (plain.length > TTS_READ_LIMIT) {  // 上限内の最後の文末で切る（なければ強制カット）
       const head = plain.slice(0, TTS_READ_LIMIT);
       const m = head.match(/[\s\S]*[。！？!?\n]/);
@@ -2673,86 +2979,75 @@ JS = r'''
     });
   }
 
-  async function speakJapanese(text) {
+  // /tts（VOICEVOX・en-US）でチャンクを先読みしながら順に再生する。途中のチャンクで失敗したら
+  // 残りだけを端末TTSで読み切る（従来は1チャンクでも再生済みだと黙って打ち切り＝最後まで読まない一因）。
+  async function speakChunks(text, opts, voiceParam, profile) {
     stopSpeak();
     const my = ++ttsSeq;
-    const plain = limitTtsText(text);
+    const plain = limitTtsText(text, opts);
     if (!plain) return;
     const chunks = ttsChunks(plain);
     byId('tts-stop').hidden = false;
-    const fetchChunk = c => fetch('/tts?text=' + encodeURIComponent(c))
+    const fetchChunk = c => fetch('/tts?' + voiceParam + 'text=' + encodeURIComponent(c))
         .then(r => { if (!r.ok) throw 0; return r.blob(); })
         .then(b => URL.createObjectURL(b));
-    let playedAny = false;
+    let i = 0;
     let next = fetchChunk(chunks[0]);
     try {
-      for (let i = 0; i < chunks.length; i++) {
+      for (; i < chunks.length; i++) {
         const url = await next;
         if (i + 1 < chunks.length) next = fetchChunk(chunks[i + 1]);  // 再生中に次チャンクを先読み
         if (my !== ttsSeq) { URL.revokeObjectURL(url); return; }    // 停止/新規発話で離脱
         await playUrl(url);
-        playedAny = true;
         URL.revokeObjectURL(url);
         if (my !== ttsSeq) return;
       }
-    } catch (e) {  // /tts 失敗（VOICEVOX 停止等）→ 端末TTSへ。一部再生済みなら二重読み回避で黙る
-      if (my === ttsSeq && !playedAny) { speakFallback(plain); return; }
+    } catch (e) {
+      if (my === ttsSeq) speakFallback(chunks.slice(i), profile);
+      return;
     }
     if (my === ttsSeq) byId('tts-stop').hidden = true;
   }
 
-  function speakEnglish(text) {
-    stopSpeak();
-    const my = ++ttsSeq;
-    const plain = limitTtsText(text);
-    if (!plain) return;
-    const chunks = ttsChunks(plain);
-    byId('tts-stop').hidden = false;
-    const fetchChunk = c => fetch('/tts?voice=en-US&text=' + encodeURIComponent(c))
-        .then(r => { if (!r.ok) throw 0; return r.blob(); })
-        .then(b => URL.createObjectURL(b));
-    let playedAny = false;
-    let next = fetchChunk(chunks[0]);
-    (async () => {
-      try {
-        for (let i = 0; i < chunks.length; i++) {
-          const url = await next;
-          if (i + 1 < chunks.length) next = fetchChunk(chunks[i + 1]);
-          if (my !== ttsSeq) { URL.revokeObjectURL(url); return; }
-          await playUrl(url);
-          playedAny = true;
-          URL.revokeObjectURL(url);
-          if (my !== ttsSeq) return;
-        }
-      } catch (_) {
-        // Keep the fallback English too; never fall back to Japanese VOICEVOX here.
-        if (my === ttsSeq && !playedAny) speakFallback(plain, ENGLISH_VOICE_PROFILE);
-        return;
-      }
-      if (my === ttsSeq) byId('tts-stop').hidden = true;
-    })();
+  function speakJapanese(text, opts) {
+    return speakChunks(text, opts, '', undefined);
   }
 
-  function speakVoice(text, language = 'en') {
-    if (language === 'ja') return speakJapanese(text);
-    return speakEnglish(text);
+  function speakEnglish(text, opts) {
+    // Keep the fallback English too; never fall back to Japanese VOICEVOX here.
+    speakChunks(text, opts, 'voice=en-US&', ENGLISH_VOICE_PROFILE);
+  }
+
+  // 自動読み上げは要点だけ（summary）。メッセージ横のボタンは {summary:false} で全文を読む。
+  function speakVoice(text, language = 'en', opts = {summary: true}) {
+    if (language === 'ja') return speakJapanese(text, opts);
+    return speakEnglish(text, opts);
   }
 
   // Normal chat read-aloud (automatic and per-message) follows the saved dashboard language.
-  function speak(text) {
-    return speakVoice(text, DASHBOARD_DISPLAY_LANGUAGE);
+  function speak(text, opts) {
+    return speakVoice(text, DASHBOARD_DISPLAY_LANGUAGE, opts);
   }
 
+  function isSpeaking() {
+    try { return !ttsAudio.paused || speechSynthesis.speaking; } catch (e) { return !ttsAudio.paused; }
+  }
+
+  // 端末TTS。長い1発話は Chrome が途中で黙ることがあるので、チャンクごとの発話をキューに積む。
   function speakFallback(t, profile = {lang:'ja-JP', rate:1.0, pitch:1.0, volume:1.0}) {
     try {
       speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance(t);
-      u.lang = profile.lang;
-      u.rate = profile.rate;
-      u.pitch = profile.pitch;
-      u.volume = profile.volume;
-      u.onend = u.onerror = () => { byId('tts-stop').hidden = true; };
-      speechSynthesis.speak(u);
+      const chunks = Array.isArray(t) ? t : ttsChunks(t);
+      chunks.forEach((chunk, n) => {
+        const u = new SpeechSynthesisUtterance(chunk);
+        u.lang = profile.lang;
+        u.rate = profile.rate;
+        u.pitch = profile.pitch;
+        u.volume = profile.volume;
+        if (n === chunks.length - 1) u.onend = () => { byId('tts-stop').hidden = true; };
+        u.onerror = () => { byId('tts-stop').hidden = true; };
+        speechSynthesis.speak(u);
+      });
     } catch (e) { byId('tts-stop').hidden = true; }
   }
 
@@ -2841,6 +3136,7 @@ JS = r'''
           return;
         }
         clearInterval(tab.pollTimer); tab.pollTimer = null;
+        msgEl.dataset.timestamp = new Date().toISOString();
         tab.jobId = '';
         if (!isActive()) tab.unread = true;
         else if (minimized) miniUnread = true;  // 畳んでいる間に届いた返答は ✅ で知らせる
@@ -2929,6 +3225,7 @@ JS = r'''
   function appendHistoryMessage(tab, message) {
     const el = document.createElement('div');
     el.className = 'chat-msg ' + message.role;
+    el.dataset.timestamp = message.timestamp || '';
     el.innerHTML = mdlite(message.text);
     attachCopy(el, message.text);
     paneOf(tab.id).appendChild(el);
@@ -3260,6 +3557,7 @@ JS = r'''
             if (!pane) return null;
             const d2 = document.createElement('div');
             d2.className = 'chat-msg ' + role;
+            d2.dataset.timestamp = d.created_at ? new Date(d.created_at * 1000).toISOString() : '';
             d2.innerHTML = html;
             if (typeof text === 'string') attachCopy(d2, text);
             pane.appendChild(d2);
@@ -3309,7 +3607,12 @@ JS = r'''
       }
     }
     const sp = e.target.closest('.msg-speak');
-    if (sp) { e.preventDefault(); unlockAudio(); speak(sp.closest('.chat-msg').dataset.ttsText || ''); return; }
+    if (sp) {  // 押した時は全文（パス・コード等は除く）。音声会話の返答はその会話の言語で読む
+      e.preventDefault(); unlockAudio();
+      const m = sp.closest('.chat-msg');
+      speakVoice(m.dataset.ttsText || '', m.dataset.ttsLang || DASHBOARD_DISPLAY_LANGUAGE, {summary: false});
+      return;
+    }
     const copy = e.target.closest('.msg-copy');
     if (copy) { e.preventDefault(); copyMessage(copy); return; }
     const qc = e.target.closest('[data-qcancel]');
@@ -3758,6 +4061,19 @@ CHOICE_LABELS = {"other": "その他（自由に書く）", "send": "まとめ�
                  "recommended": "推奨"}
 
 
+# アクションカード（```shuki-action）の文言。dock_html() が訳して JS の ACTION_LABELS に埋め込む。
+ACTION_LABELS = {
+    "cal_head": "Googleカレンダーに追加", "task_head": "タスクを作成", "add": "選んだ予定を追加",
+    "create": "タスクを作成する", "skip": "見送る", "skipped": "見送りました（押せばあとで追加できます）",
+    "added": "追加済み", "created": "作成済み", "open": "開く", "overlap": "重なる予定",
+    "nooverlap": "重なる予定なし", "checking": "空きを確認中…", "checkfail": "空きを確認できませんでした",
+    "allday": "終日", "include": "この予定を含める", "title": "タイトル", "date": "日付", "start": "開始",
+    "end": "終了", "area": "Area", "due": "期限", "next": "次の一手", "done_when": "完了条件", "parent": "親",
+    "noarea": "（なし）", "preparing": "カードを準備中…", "bad": "カードを読み取れませんでした",
+    "failed": "失敗", "human_only": "完了条件が空なので human_only として作成します",
+    "cal_done": "カードからGoogleカレンダーに追加しました", "task_done": "カードからタスクを作成しました",
+}
+
 def assets_head():
     """<head> に入れるドックのスタイル。"""
     return "<style>" + CSS + dashboard_mascot.CSS + "</style>"
@@ -3839,6 +4155,9 @@ def dock_html():
             "noSession": "この会話の保存先はまだ確認できません。履歴から保存済みの会話を選べます。",
             "refresh": "更新", "history": "履歴",
         }.items()}, ensure_ascii=False).replace("<", "\\u003c"))
+        .replace("__ACTION_LABELS__", json.dumps({k: shuki_i18n.t(v, ctx="chat") for k, v in ACTION_LABELS.items()},
+                                                 ensure_ascii=False).replace("<", "\\u003c"))
+        .replace("__ACTION_AREAS__", json.dumps(list(dashboard_chat_actions.AREAS), ensure_ascii=False))
         .replace("__CHOICE_LABELS__", json.dumps({k: shuki_i18n.t(v, ctx="chat") for k, v in CHOICE_LABELS.items()},
                                                  ensure_ascii=False).replace("<", "\\u003c"))
         .replace("__AUTO_MODEL_INITIAL_MODEL__", json.dumps(current))
@@ -3994,7 +4313,31 @@ const voiceChat = new VoiceConversation({
   draft: text => { setVoiceStatus(voiceChat.speakingPractice && text ? 'Answer captured — continue speaking or press Send answer.' : text || 'Listening'); },
   user: text => { byId('voice-conversation-hint').hidden = true; return addMsg('user', mdlite(text), text); },
   reply: () => addMsg('assistant', '…'),
-  render: (el, text) => { el.innerHTML = mdlite(text); attachCopy(el, text); renderMermaidIn(el); },
+  // 音声の返答にも読み上げボタン（コピーの隣）。押すとその会話の言語で全文を読む（2026-10-14）。
+  render: (el, text) => {
+    el.dataset.timestamp = new Date().toISOString();
+    el.innerHTML = mdlite(text); attachSpeak(el, text); el.dataset.ttsLang = voiceChat.language; renderMermaidIn(el);
+  },
+  // 承認した作業は裏のタブで走る。音声タブには進捗カードを1枚だけ置いて更新し続ける（2026-10-14）。
+  background: bg => {
+    if (!bg.card || !bg.card.isConnected) {
+      bg.card = addMsg('assistant', '');
+      bg.card.classList.add('voice-bg-card');
+    }
+    const label = {running: 'Running in the background', done: 'Finished', error: 'Stopped with an error',
+      stopped: 'Stopped', unknown: 'Status unavailable'}[bg.status] || bg.status;
+    const latest = String(bg.latest || '').split('\n').map(line => line.replace(/[*_`#>]/g, '').trim())
+      .filter(Boolean).pop() || '';
+    bg.card.innerHTML = '<strong>' + escapeHtml(bg.label) + '</strong> · ' + escapeHtml(label)
+      + (latest ? '<div class="voice-bg-latest">' + escapeHtml(latest.slice(0, 160)) + '</div>' : '');
+    const open = document.createElement('button');
+    open.type = 'button'; open.className = 'choice-btn';
+    open.textContent = bg.status === 'running' ? 'Open its tab' : 'Open the result';
+    open.title = 'Opening the tab ends voice chat';
+    open.onclick = () => { if (tabById(bg.tabId)) switchTab(bg.tabId); };
+    bg.card.appendChild(open);
+  },
+  isSpeaking,
   proposal: proposal => {
     // 承認前の提案(Go ahead待ち)は会話の一部として会話ビューにそのまま出す（作業タブへは出さない）。
     // 作業タブに切り出すのは承認後の進行状況(work)だけ（2026-09-26）。
@@ -4083,14 +4426,7 @@ const voiceChat = new VoiceConversation({
     else localStorage.removeItem('voiceWork');
   },
   speak: (text, language = 'en', force = false) => { if (autoSpeak || force) speakVoice(text, language); },
-  stopSpeak,
-  // 音声会話から対話型ブリーフィングへ（2026-10-08）。doExec が音声会話を閉じて保存済みの
-  // 読み上げ設定へ戻すので、その後で読み上げを ON にする（このセッションだけ・保存はしない）。
-  catchup: () => {
-    doExec('catchup', '', 'キャッチアップ');
-    autoSpeak = true;
-    byId('tts-toggle').classList.add('on');
-  }
+  stopSpeak
 });
 function toggleVoiceConversation() {
   if (voiceChat.active) { voiceChat.end(); return; }
