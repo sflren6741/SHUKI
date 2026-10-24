@@ -20,6 +20,8 @@ FEATURE_MARKERS = {
     "crossword": "plugins/crossword/manifest.json",
     "styleguide": "plugins/styleguide/manifest.json",
     "meeting": "plugins/meeting/manifest.json",
+    "cloud_stt": "dashboard_stt.py",
+    "offline_memos": "home_outbox.py",
 }
 PLUGIN_SKILLS = {"crossword-gen": "crossword", "visualize": "visualize"}
 FEATURE_ROUTES = {
@@ -27,6 +29,7 @@ FEATURE_ROUTES = {
     "control": "operations", "review": "operations", "notifications": "operations",
     "rec-dismiss": "operations", "decisions": "decisions", "gaps": "decisions",
     "bgm": "game",
+    "writing-companion": "journal", "writing-companion.js": "journal",
 }
 _SCRIPTS = Path(__file__).resolve().parent.parent
 _activation = {}
@@ -49,6 +52,8 @@ def feature_enabled(feature):
 
 def route_enabled(path):
     owner = FEATURE_ROUTES.get(path.strip("/").split("/", 1)[0])
-    integration = {"/journal/growth": "game", "/game/reflection": "journal"}.get(path.rstrip("/"))
+    integration = {"/journal/growth": "game", "/game/reflection": "journal",
+                   "/files/journal-preview": "journal", "/files/journal-covers": "journal",
+                   "/files/journal-cover": "journal"}.get(path.rstrip("/"))
     return ((owner is None or feature_enabled(owner))
             and (integration is None or feature_enabled(integration)))

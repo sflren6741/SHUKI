@@ -1,5 +1,19 @@
 # Setup — reproduce this system / 再現手順
 
+## Local voice input (public release)
+
+Public voice recognition runs locally with [faster-whisper](https://github.com/SYSTRAN/faster-whisper). No Soniox account, speech-provider key or paid speech API is required. Soniox, offline memo delivery and optional feature plugins are excluded from this release.
+
+Install the tested optional voice dependencies in the **same Python environment that launches the dashboard**. For the Windows `scripts/.venv` layout, run from the repository root:
+
+```powershell
+.\scripts\.venv\Scripts\python.exe -m pip install faster-whisper==1.2.1 av==16.1.0
+```
+
+Without these optional packages, the dashboard still starts and voice requests return a setup message. With no custom `stt_script`, the bundled `shuki_core/speech.py` uses the multilingual `small` model on CPU with int8 computation. The first voice request downloads public model weights into the external SHUKI data directory (`speech/models`); allow internet access and time for this first download. Later recognition uses the cached model locally. Audio is processed in memory rather than uploaded to a speech service. Recognition quality and speed depend on the clip and computer; test your microphone after setup.
+
+An existing custom local engine can still be selected using private `stt_script` and `stt_venv_python` paths. Empty/null custom paths select the bundled local implementation; never copy another user's paths or credentials. Microphone access needs localhost or HTTPS when accessing SHUKI from another device. A public update does not activate or configure another installation automatically.
+
 > **TL;DR** — ツールを2つ（Git・Claude Code）入れてこのリポをダウンロードし、ターミナルで `claude` を起動して `/setup` と打つだけ。残りはチャットで全部設定されます。ファイルを直接編集する必要はありません。日常の操作は、セットアップ後にブラウザで起動する SHUKI ダッシュボードから行います。
 >
 > **所要時間の目安**：手作業 約10〜15分 ＋ `/setup` の対話 約10〜15分。

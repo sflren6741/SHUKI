@@ -38,22 +38,39 @@ RUNTIME_PROMPTS = {
 MODEL_PROMPTS: dict[tuple[str, str], str] = {}
 
 
-def instructions(*, runtime, cli_model="", shared="", runtime_extra=""):
-    """Compose policy layers without resolving models or granting capabilities."""
+def instructions(*, runtime, cli_model="", shared="", runtime_extra="",
+                 policy="", runtime_instructions=None):
+    """Compose provider-independent rules and an explicit execution adapter.
+
+    Adapters own policy delivery: use the canonical AGENTS.md and its references,
+    either through a verified native loader or the policy argument. An unknown
+    runtime must supply both policy and its actual capability instructions.
+    This composes text; it does not enable a provider or grant tools.
+    """
     core = SHARED_CORE + ("\n" + shared if shared else "")
-    adapter = RUNTIME_PROMPTS[runtime]
+    if runtime_instructions is None:
+        adapter = RUNTIME_PROMPTS[runtime]
+    else:
+        if not isinstance(runtime_instructions, str) or not runtime_instructions.strip():
+            raise ValueError("An adapter must describe its actual runtime capabilities")
+        if runtime not in RUNTIME_PROMPTS and not policy.strip():
+            raise ValueError("A new runtime must explicitly receive the canonical SHUKI policy")
+        adapter = runtime_instructions
     if runtime_extra:
         adapter += "\n" + runtime_extra
-    parts = ["[SHUKI shared core]\n" + core,
-             f"[SHUKI runtime: {runtime}]\n" + adapter]
+    parts = (["[SHUKI policy]\n" + policy] if policy else [])
+    parts += ["[SHUKI shared core]\n" + core,
+              f"[SHUKI runtime: {runtime}]\n" + adapter]
     adjustment = MODEL_PROMPTS.get((runtime, cli_model), "")
     if adjustment:
         parts.append(f"[SHUKI model: {cli_model}]\n" + adjustment)
     return "\n\n".join(parts)
 
 
-def compose(task, *, runtime, cli_model="", shared="", runtime_extra=""):
+def compose(task, *, runtime, cli_model="", shared="", runtime_extra="",
+            policy="", runtime_instructions=None):
     """Keep the user's task first, followed by the reusable instruction layers."""
     return task + "\n\n---\n" + instructions(
         runtime=runtime, cli_model=cli_model, shared=shared,
-        runtime_extra=runtime_extra)
+        runtime_extra=runtime_extra, policy=policy,
+        runtime_instructions=runtime_instructions)

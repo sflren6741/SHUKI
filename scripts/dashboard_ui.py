@@ -18,6 +18,7 @@ import json
 import re
 
 import dashboard_chat
+import dashboard_commands
 import dashboard_icons
 import dashboard_mascot
 import dashboard_settings
@@ -265,9 +266,24 @@ def page_header(active, title, extra_html=""):
     logo = dashboard_mascot.button_html("page") or '<img class="hd-logo" src="/icon-32.png" alt="">'
     return (f'<header class="shuki-header">'
             f'<div class="hd-top"><h1>{logo}<span class="hd-title">{title}</span></h1>'
-            f'<div class="hd-extra">{extra_html}{sidebar_trigger_html()}</div></div>'
+            f'<div class="hd-extra">{extra_html}<button type="button" class="hbtn" id="command-trigger" '
+            f'aria-label="Find pages, skills, tasks and notes" aria-haspopup="dialog" '
+            f'title="Find pages, skills, tasks and notes (Ctrl+K / ⌘K)">{dashboard_icons.ui_icon_svg("search", 18)}</button>'
+            f'{sidebar_trigger_html()}</div></div>'
             f'<nav class="hd-nav">{nav_html(active)}</nav>'
-            f'</header>{sidebar_panel_html()}')
+            f'</header>{sidebar_panel_html()}{command_palette_html(active)}')
+
+
+def command_palette_html(active):
+    pages = []
+    for _key, label, href, children in _visible_nav_pages(active):
+        if children:
+            pages.extend((t(child_label, ctx="nav"), url) for _, child_label, url in children)
+        elif href:
+            pages.append((t(label, ctx="nav"), href))
+    pages.extend((t(label, ctx="sidebar"), href) for _, label, href, _ in _SIDEBAR_LINKS
+                 if shuki_core.route_enabled(href) and href not in {url for _, url in pages})
+    return dashboard_commands.render(pages, dashboard_chat._skill_catalog_getter())
 
 
 # ── クイックアクセス・サイドバー（2026-09-26 新設） ──────────────────────────────

@@ -25,6 +25,7 @@ vault 全体（約2000件）に同じことをすると約9秒かかる。一方
 import argparse
 import json
 import os
+import posixpath
 import re
 import sys
 import threading
@@ -36,14 +37,17 @@ if getattr(sys.stdout, "encoding", None) and sys.stdout.encoding.lower() != "utf
 if getattr(sys.stderr, "encoding", None) and sys.stderr.encoding.lower() != "utf-8":
     sys.stderr.reconfigure(encoding="utf-8")
 from collections import OrderedDict
+from itertools import islice
 from datetime import date, timedelta
 from pathlib import Path, PurePosixPath
+from urllib.parse import unquote, urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from shuki_core import vault as achievements  # noqa: E402  (VAULT/read_text/frontmatter を再利用)
 
 VAULT = achievements.VAULT
 import shuki_paths
+import shuki_profile
 
 CACHE_FILE = shuki_paths.code_store("core/vault_index_cache.json")
 IGNORE_DIRS = {".obsidian", ".git", ".trash", "node_modules", "__pycache__", ".claude"}
@@ -57,6 +61,78 @@ _LIST_ITEM_RE = re.compile(r"^\s*-\s*(.+)$")
 WIKILINK_RE = re.compile(r"(?<!!)\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]")
 EMBED_RE = re.compile(r"!\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]")
 HASHTAG_RE = re.compile(r"(?:^|\s)#([^\s#\[\]]{1,40})")
+IMAGE_PREVIEW_VERSION = 2
+_IMAGE_SUFFIXES = {'.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg'}
+_IMAGE_RE = re.compile(
+    r'!\[\[(?P<wiki>[^\]\r\n]+)\]\]'
+    r'|!\[(?:\\.|[^\]\\\r\n])*\]\(\s*'
+    r'(?P<markdown><[^>\r\n]+>|(?:\\.|[^\s()\\]|\([^()\r\n]*\))+)'
+    r'(?:\s+["\'][^\r\n]*?["\'])?\s*\)'
+    r'|<img\b[^>]*?\ssrc\s*=\s*["\'](?P<html>[^"\']+)["\'][^>]*>',
+    re.IGNORECASE,
+)
+
+
+def _image_target(value, note_path, vault, wiki=False):
+    """Normalize an embedded image without fetching it or escaping the vault."""
+    value = value.strip().strip('<>')
+    if wiki:
+        value = value.split('|', 1)[0].strip()
+    if not value or '\x00' in value or value.startswith('//'):
+        return None
+    try:
+        url = urlsplit(value)
+        if url.scheme:
+            if url.scheme.lower() in ('http', 'https') and url.netloc and not (url.username or url.password):
+                return value
+            return None
+    except ValueError:
+        return None
+    path = unquote(url.path).replace('\\', '/')
+    if ':' in path or path.startswith('//') or PurePosixPath(path).suffix.lower() not in _IMAGE_SUFFIXES:
+        return None
+    rooted = posixpath.normpath(path.lstrip('/'))
+    relative = posixpath.normpath(posixpath.join(posixpath.dirname(note_path), path))
+    # Obsidian wikilinks use vault paths; Markdown first uses the note directory.
+    candidates = [rooted] if wiki or path.startswith('/') else [relative, rooted]
+    candidates = [p for p in candidates if p not in ('.', '..') and not p.startswith('../')
+                  and not shuki_profile.is_private_note(p, {})]
+    for candidate in candidates:
+        if (Path(vault) / candidate).is_file():
+            return candidate
+    if wiki or '/' not in path:
+        return rooted if rooted in candidates else None  # existing bare-name lookup
+    return candidates[0] if candidates else None
+
+
+def first_embedded_image(body, note_path, vault):
+    """First visible wiki/Markdown/HTML image; ignore comments and code examples."""
+    return next(embedded_images(body, note_path, vault), None)
+
+
+def embedded_images(body, note_path, vault):
+    """Distinct visible image targets, in document order; callers may stop early."""
+    body = re.sub(r'<!--.*?-->|%%.*?%%', '', body, flags=re.DOTALL)
+    fence = None
+    seen = set()
+    for line in body.splitlines():
+        marker = re.match(r'^\s{0,3}(`{3,}|~{3,})', line)
+        if marker:
+            token = marker.group(1)
+            if fence is None:
+                fence = token
+            elif token[0] == fence[0] and len(token) >= len(fence):
+                fence = None
+            continue
+        if fence is not None or line.startswith(('    ', '\t')):
+            continue
+        line = re.sub(r'(`+).*?\1', '', line)
+        for match in _IMAGE_RE.finditer(line):
+            kind = match.lastgroup
+            target = _image_target(match.group(kind), note_path, vault, wiki=kind == 'wiki')
+            if target and target not in seen:
+                seen.add(target)
+                yield target
 
 
 def _strip_quotes(s):
@@ -276,6 +352,8 @@ class VaultIndex:
             if t not in tags:
                 tags.append(t)
         folder = str(p.parent)
+        images = ([] if shuki_profile.is_private_note(rel, fm) else
+                  list(islice(embedded_images(body, rel, self.vault), 2)))
         return {
             "_src": "notes", "_id": rel, "_path": rel, "_ts": st.st_mtime,
             "path": rel, "name": p.stem, "ext": p.suffix.lstrip("."),
@@ -283,6 +361,8 @@ class VaultIndex:
             "ctime": st.st_ctime, "mtime": st.st_mtime, "size": st.st_size,
             "tags": tags, "links": links, "embeds": embeds,
             "fm": fm, "excerpt": _excerpt(body), "cover": fm.get("cover") or None,
+            "first_image": images[0] if images else None,
+            "has_multiple_images": len(images) > 1,
             "insight": achievements.extract_insight(body),
         }
 
@@ -291,14 +371,16 @@ class VaultIndex:
             data = json.loads(self.cache_path.read_text(encoding="utf-8"))
             with self._lock:
                 self._notes = {n["path"]: n for n in data.get("notes", [])}
-                self._sig = {p: v for p, v in data.get("sig", {}).items()}
+                self._sig = ({p: v for p, v in data.get("sig", {}).items()}
+                             if data.get("image_preview_version") == IMAGE_PREVIEW_VERSION else {})
         except Exception:
             self._notes, self._sig = {}, {}
 
     def _save_cache(self):
         try:
             with self._lock:
-                data = {"notes": list(self._notes.values()), "sig": self._sig}
+                data = {"notes": list(self._notes.values()), "sig": self._sig,
+                        "image_preview_version": IMAGE_PREVIEW_VERSION}
             self.cache_path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self.cache_path.with_suffix(".tmp")
             tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")

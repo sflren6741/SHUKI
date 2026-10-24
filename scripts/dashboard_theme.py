@@ -475,6 +475,17 @@ def _is_light(hex_color: str) -> bool:
     return lum > 0.5
 
 
+def settings_from_query(query):
+    """Read-only appearance preview; never merge arbitrary query keys into settings."""
+    current = dashboard_settings.load_settings()
+    if query.get("preview") != ["1"]:
+        return current
+    allowed = ("theme", "style", "accent", "gradient_secondary", "gradient_mode")
+    draft = {key: values[0] for key in allowed
+             if len(values := query.get(key, [])) == 1 and len(values[0]) <= 64}
+    return dashboard_settings.sanitize({**current, **draft})
+
+
 def theme_css(settings=None) -> str:
     """GET /theme.css の本体。:root{ --bg:...; --danger:...; --area-仕事:...; } を返す。
 
@@ -502,15 +513,18 @@ def theme_css(settings=None) -> str:
     chart_blue = '#2a78d6' if _is_light(pal['card']) else '#3987e5'
     rows.append(f'  --chart-blue: {chart_blue};')
     rows += [f"  {k}: {v};" for k, v in SEMANTIC.items()]
-    colorblind = settings.get("theme") == "colorblind" and style not in MATRIX_STYLE_KEYS
+    colorblind = settings.get("theme") in ("colorblind", "colorblind-dark") and style not in MATRIX_STYLE_KEYS
     if colorblind:
         # Orange danger and blue success avoid a red/green status pair.
         # Warning ink is independent of a user-selected accent.
-        rows.append("  --warn: #855b00;")
+        rows.append("  --warn: " + ("#ffd166" if settings["theme"] == "colorblind-dark" else "#855b00") + ";")
     rows += [f"  {k}: {v};" for k, v in OBSIDIAN_ALIAS.items()]
     rows += [f"  {k}: {v};" for k, v in DERIVED.items()]
     rows += [f"  {k}: {v};" for k, v in s_derived.items()]
     rows += [f"  {k}: {v};" for k, v in HEAT.items()]
+    color_theme = settings.get("theme") in dashboard_settings.COLOR_THEMES and style not in MATRIX_STYLE_KEYS
+    if color_theme:
+        rows += [f"  --{k}: {v};" for k, v in dashboard_settings.color_theme_surfaces(settings, pal).items()]
     # Area色は「地が明るいか」で暗色版に切り替える（旧: theme=="light" 決め打ち。白ベースの
     # milky テーマ追加でネオン系が白地に載り読めなくなるため、輝度で判定する方式へ・2026-09-04）
     area_c = AREA_C_LIGHT if _is_light(pal["bg"]) else AREA_C
@@ -522,6 +536,23 @@ def theme_css(settings=None) -> str:
     rows += [f"  --medal-{name}: {hexv};" for name, hexv in MEDAL_C.items()]
     css = ":root {\n" + "\n".join(rows) + "\n}\n"
     css += s_css + SELECT_CSS
+    if colorblind:
+        # Links remain identifiable without hue perception, including custom accents.
+        css += "\nhtml body a:not(.pill):not(.bn-item):not(.hbtn) { text-decoration:underline; text-underline-offset:.18em; }\n"
+    if color_theme:
+        css += """
+html body .focus-band {
+  background:linear-gradient(120deg,var(--theme-start),var(--theme-end));
+}
+"""
+        if settings.get("theme") == "gradient":
+            css += """
+html body {
+  background-image:linear-gradient(135deg,var(--theme-start),var(--bg),var(--theme-end));
+  background-attachment:fixed;
+}
+@media(forced-colors:active) { html body { background-image:none; } }
+"""
     # 飾りは matrix（走査線という別の飾りを既に持つ）とは併用しない
     if style not in MATRIX_STYLE_KEYS:
         css += DECOR_CSS.get(settings.get("decor", dashboard_settings.DEFAULT_DECOR), "")

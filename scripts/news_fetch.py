@@ -16,11 +16,13 @@ url の選択と reason の一言だけ＝ニュース内容そのものの幻�
 実行: python news_fetch.py（手動 or news_fetch.ps1 経由で日次スケジューラ）。
 依存: 標準ライブラリのみ（feedparser等は使わない・AGENTS.md §📜 ルール15 標準ライブラリ優先）。
 """
+import argparse
 import json
 import model_executor
 import os
 import re
 import sys
+import tempfile
 import time
 import unicodedata
 import urllib.error
@@ -524,7 +526,9 @@ PROMPT_TEMPLATE = """SHUKIダッシュボードの「ニュース」セクショ
 
 ## 手順
 1. 下記「候補一覧」から、重要度が高い・ユーザーが読む価値が高いものだけを選ぶ
-   （カテゴリごと最大3件、合計最大10件程度が目安。無理に埋めなくてよい。候補が薄い日は0〜数件でよい）
+   （カテゴリごと最大3件、合計最大10件程度が目安。無理に埋めなくてよい）
+   緊急の星3記事がなくても、読む価値のある星1〜2の記事は選ぶ。購読カテゴリの有用な動きを過度に絞らない。
+   0件は全候補が無関係・広告・重複などの場合だけ。その場合は JSON に no_selection_reason を必ず書く。
 2. 選んだ各itemに "reason"（選んだ理由。日本語15〜40字程度）を1つ書く
 3. 選んだ各itemに "stars"（ユーザーが確認すべき度合い＝重要性×緊急性。1〜3の整数）を付ける：
    - 3 = 今日のうちに見たほうがいい。ユーザーの運用・投資判断・進行中のタスクに直接影響する
@@ -615,20 +619,25 @@ def validate_output(out_path, candidates, today):
     by_url = {c["url"]: c for c in candidates}
     now = datetime.now().astimezone().isoformat()
     if not out_path.exists():
-        return []
+        raise ValueError("News selection output is missing")
     try:
-        data = json.loads(out_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return []
+        data = json.loads(out_path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as error:
+        raise ValueError(f"News selection output is unreadable: {error}") from error
+    if not isinstance(data, dict) or data.get("date") != today:
+        raise ValueError("News selection must be an object with today's date")
     raw_items = data.get("items")
     if not isinstance(raw_items, list):
-        return []
+        raise ValueError("News selection items must be a list")
+    empty_reason = data.get("no_selection_reason")
+    if not raw_items and (not isinstance(empty_reason, str) or not empty_reason.strip()):
+        raise ValueError("Empty news selection requires a no_selection_reason")
     kept = []
     for it in raw_items:
         if not isinstance(it, dict):
             continue
         url = it.get("url")
-        orig = by_url.get(url)
+        orig = by_url.get(url) if isinstance(url, str) else None
         if not orig:
             continue  # 候補外のurl＝幻覚。破棄
         kept.append({
@@ -637,10 +646,15 @@ def validate_output(out_path, candidates, today):
             "reason": str(it.get("reason") or "")[:80],
             "stars": clamp_stars(it.get("stars")),
         })
+    if raw_items and not kept:
+        raise ValueError("News selection contains no valid candidate URLs")
     # 星の高い順に並べ替えてから保存する（表示側は届いた順に出すだけでよくなる）
     kept.sort(key=lambda k: -k["stars"])
+    result = {"date": today, "generated_at": now, "items": kept}
+    if not kept:
+        result["no_selection_reason"] = empty_reason.strip()[:500]
     out_path.write_text(json.dumps(
-        {"date": today, "generated_at": now, "items": kept}, ensure_ascii=False, indent=1,
+        result, ensure_ascii=False, indent=1,
     ), encoding="utf-8")
     return kept
 
@@ -771,7 +785,7 @@ def save_seen(seen):
 
 # ── メイン ───────────────────────────────────────────────────
 
-def main():
+def main(*, recover_today=False):
     NEWS_DIR.mkdir(parents=True, exist_ok=True)
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     today = date.today().isoformat()
@@ -781,6 +795,14 @@ def main():
         with log_path.open("a", encoding="utf-8") as fh:
             fh.write(f"[{time.strftime('%H:%M:%S')}] {msg}\n")
 
+    existing = news_store.read_issue(today)
+    if existing and existing.get("items"):
+        if recover_today:
+            raise ValueError("Recovery requires an empty or missing issue for today")
+        log("[already published] Preserving today's nonempty edition")
+        print(json.dumps({"selected": len(existing["items"]), "already_published": True}))
+        return
+
     try:
         weekly_feature = build_weekly_knowledge_feature(date.fromisoformat(today))
     except (urllib.error.URLError, ET.ParseError, TimeoutError, OSError) as error:
@@ -789,34 +811,47 @@ def main():
 
     feeds = json.loads(FEEDS_FILE.read_text(encoding="utf-8"))["feeds"]
     seen = news_store.load_seen()
-    candidates, errors = collect_candidates(feeds, set(seen.keys()))
+    excluded = {url for url, day in seen.items() if not recover_today or day != today}
+    candidates, errors = collect_candidates(feeds, excluded)
     log(f"=== news_fetch start: 候補{len(candidates)}件（feed errors: {len(errors)}） ===")
     for e in errors:
         log(f"[feed error] {e}")
 
-    out_path = news_store.work_path(today, NEWS_DIR)
     kept = []
 
-    if not candidates:
-        write_empty(out_path, today)
-        log("新着候補なし。")
-    else:
-        prompt = build_prompt(candidates, out_path, today)
-        ok, msg = run_claude(prompt)
-        log(("[OK] " if ok else "[NG] ") + msg)
-
-        kept = validate_output(out_path, candidates, today) if ok else []
-        if not ok:
+    # A fresh staging path prevents a stale file or a failed model from replacing an issue.
+    with tempfile.TemporaryDirectory(prefix="selection-", dir=NEWS_DIR) as staging:
+        out_path = Path(staging) / "issue.json"
+        if not candidates:
             write_empty(out_path, today)
+            log("新着候補なし。")
+        else:
+            prompt = build_prompt(candidates, out_path, today)
+            ok, msg = run_claude(prompt)
+            log(("[OK] " if ok else "[NG] ") + msg)
+            try:
+                if not ok:
+                    raise ValueError(f"News selector failed: {msg}")
+                kept = validate_output(out_path, candidates, today)
+            except ValueError as error:
+                log(f"[selection error] {error}; issue and processed URLs preserved")
+                raise
+            if not kept:
+                log("[empty selection] " + json.loads(out_path.read_text(encoding="utf-8"))["no_selection_reason"])
 
-        # 提示した候補は選ばれなかったものも含め既読化する（同じ記事が翌日以降も出続けないように）
+        process_watches(out_path, today, log)
+        attach_weekly_knowledge_feature(out_path, today, weekly_feature)
+        if news_store.database() is None:
+            out_path.replace(news_store.work_path(today, NEWS_DIR))
+        else:
+            news_store.commit_issue(today, out_path)
+
+    # Only consume candidates once a validated edition has actually been saved.
+    if candidates:
         for c in candidates:
             seen[c["url"]] = today
         save_seen(seen)
 
-    process_watches(out_path, today, log)
-    attach_weekly_knowledge_feature(out_path, today, weekly_feature)
-    news_store.commit_issue(today, out_path)
     log(
         "[knowledge feature] "
         + (weekly_feature["title"] if weekly_feature else "候補なし")
@@ -827,4 +862,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Build the daily News edition")
+    parser.add_argument("--recover-today", action="store_true",
+                        help="Reoffer today's processed candidates when today's issue is empty")
+    main(recover_today=parser.parse_args().recover_today)

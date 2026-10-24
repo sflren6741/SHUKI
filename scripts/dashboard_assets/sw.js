@@ -1,4 +1,4 @@
-/* Push-only worker: no dashboard/API caching. */
+/* Shared push worker. Optional offline support is loaded only in private installations. */
 'use strict';
 self.addEventListener('install', event => event.waitUntil(self.skipWaiting()));
 self.addEventListener('activate', event => event.waitUntil(self.clients.claim()));

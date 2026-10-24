@@ -30,6 +30,19 @@ def _codex_executable():
     return "codex.cmd" if os.name == "nt" else "codex"
 
 
+def _codex_command():
+    """Avoid cmd.exe's PATH limit when launching the Windows npm install."""
+    executable = _codex_executable()
+    if os.name == "nt" and not os.environ.get("CODEX_EXE"):
+        shim = shutil.which(executable)
+        node = shutil.which("node.exe")
+        if shim and node:
+            entry = Path(shim).parent / "node_modules/@openai/codex/bin/codex.js"
+            if entry.is_file():
+                return [node, str(entry)]
+    return [executable]
+
+
 def _codex_error_message(output):
     """JSONLの失敗イベントから短いエラーを取り出す。通常の本文は無視する。"""
     messages = []
@@ -93,7 +106,7 @@ def _run_codex(prompt, spec, *, cwd, vault, scripts_dir, allow_scripts, timeout)
     effort = settings.get("model_effort", {}).get(
         effort_key, dashboard_settings.model_effort_defaults().get(effort_key, "medium"))
     cmd = [
-        _codex_executable(), "exec", "--json", "--ephemeral", "--ignore-user-config",
+        *_codex_command(), "exec", "--json", "--ephemeral", "--ignore-user-config",
         "--dangerously-bypass-approvals-and-sandbox", "--model", spec["cli_model"],
         "--cd", str(cwd), "--add-dir", str(vault), "--add-dir", str(data_dir), "--skip-git-repo-check",
         "-c", f"model_reasoning_effort={effort!r}", "-",

@@ -63,6 +63,8 @@ NAV_PATHS = {
                     '<circle cx="12" cy="16.8" r=".35" fill="currentColor" stroke="none"/>',
     # 📡データ管制室（2026-08-20新設）。円弧2本＋中心点＝レーダー画面のモチーフ
     "control":      '<circle cx="12" cy="12" r="1.6"/><path d="M8 8a5.7 5.7 0 018 0M5 5a10 10 0 0114 0"/>',
+    # バランス（2026-10-15新設）。六角形の枠＋内側の歪んだ多角形＝レーダーチャートのモチーフ
+    "balance":      '<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 7.5l4.5 3.5-2 5h-4l-3-5z"/>',
     "finance":      '<rect x="2.5" y="6" width="19" height="14" rx="2.5"/><path d="M2.5 10.5h19"/><circle cx="16.5" cy="14.5" r="1.1"/>',
     "game":         '<path d="M4 5v14a2 2 0 002 2h6V5a2 2 0 00-2-2H6a2 2 0 00-2 2z"/>'
                     '<path d="M20 5v14a2 2 0 01-2 2h-6V5a2 2 0 012-2h4a2 2 0 012 2z"/>',

@@ -75,6 +75,7 @@ import dashboard_files   # noqa: E402  (📁 ファイルページ。GET /files�
 import dashboard_news    # noqa: E402  (📰 ニュースページ。GET /news。news_fetch.py が生成する日次JSONを表示するだけ)
 import dashboard_calendar  # noqa: E402  (📅 カレンダーページ。GET /calendar。GCal APIを都度呼び、既存 memo キューでメモを回収)
 import calendar_utils      # noqa: E402  (Google Calendar 認証済みクライアント。get_events() をカレンダーページが使用)
+import work_sessions
 import dashboard_chat_actions  # noqa: E402  (対話パネルのアクションカード。POST /chat/action。押した時だけ予定登録／タスク起票)
 # ＝姉妹ページ /finance・/trading とはナビのポップオーバーで束ねる。2026-08-20新設・08-21 タブ集約を解体)
 import dashboard_file_links  # noqa: E402  (共有の /files ルートと URL エンコード)
@@ -95,6 +96,17 @@ if shuki_core.feature_enabled("decisions"):
     import dashboard_decisions  # noqa: E402  (⚖️ 決裁カードページ。GET /decisions。判断/選択/回答を1件ずつ消化)
 from shuki_core import plugins as shuki_plugins  # noqa: E402  (feature plugins under plugins/<id>/)
 import vault_index        # noqa: E402  (vault全体の差分インデックス。collect_tasks() が使用)
+library_thumbnails = None
+if shuki_core.feature_enabled("visualize"):
+    import library_thumbnails
+elif shuki_core.feature_enabled("game"):
+    import library_thumbnails
+import writing_intent
+if shuki_core.feature_enabled("offline_memos"):
+    import home_outbox
+if shuki_core.feature_enabled("journal"):
+    import library_journal
+    import writing_companion
 import view_engine        # noqa: E402  (baseビュー実行エンジン。GET /base が使用)
 import news_store        # noqa: E402  (ニュースの号・評価の保存先。2026-10-06)
 import shuki_db          # noqa: E402  (実行結果DB 99_System/db/shuki.db。runner.py の無人便実行結果を読む。2026-09-05)
@@ -104,6 +116,8 @@ import shuki_profile     # noqa: E402  (Area・人物の呼称・非公開パス
 from shuki_i18n import t as _t  # noqa: E402
 
 VAULT = core_vault.VAULT
+FILE_THUMBNAILS = (library_thumbnails.ThumbnailSources(VAULT)
+                   if library_thumbnails is not None else None)
 TASK_DIR = core_vault.TASK_DIR
 LOG_DIR = core_vault.LOG_DIR
 PROJECT_DIR = VAULT / "03_Projects" / "プロジェクト"
@@ -116,6 +130,16 @@ BRIEFING_HISTORY = VAULT / "07_Logs" / "ブリーフィング"
 # HTML のボタン操作結果はここに JSON で溜まるだけ（vault 本体の .md はサーバーは書かない）。
 # 反映は次回の orchestrator / 12:30 ディスパッチ便が回収して行う（人間確認系の安全設計を維持）。
 UI_QUEUE = shuki_paths.system_dir_for(VAULT) / "ui-queue"
+FILE_JOURNALS = WRITING_COMPANION = None
+if shuki_core.feature_enabled("journal"):
+    FILE_JOURNALS = library_journal.JournalFiles(
+        vault=VAULT,
+        files=lambda: list(UI_QUEUE.glob('memo_*.json')) + list((UI_QUEUE / 'processed').glob('memo_*.json')),
+        is_private=lambda text: bool(JOURNAL_PRIVATE_RE.search(text)),
+        monsters=shuki_paths.code_store('game/data') / 'journal_monsters.json',
+        art=shuki_paths.code_store('game/art') / 'monsters',
+        preferences=shuki_paths.system_dir_for(VAULT) / 'journal-file-covers.sqlite3')
+    WRITING_COMPANION = writing_companion.Companion()
 QUEUE_NAME_RE = re.compile(r"^[a-z0-9_-]{1,40}$")
 QUEUE_MAX_BYTES = 64 * 1024
 # GET /data で読み出しを許すルート（vault 全体は晒さない。ダッシュボード表示用データのみ）
@@ -231,7 +255,7 @@ MARKMAP_ASSETS = ("/assets/d3.min.js", "/assets/markmap-view.min.js", "/assets/s
 
 UPLOAD_DIR = shuki_paths.code_store("core/dashboard_uploads")
 UPLOAD_MAX_BYTES = 20 * 1024 * 1024  # 20MB
-UPLOAD_ALLOWED_EXT = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".pdf", ".txt", ".md", ".csv"}
+UPLOAD_ALLOWED_EXT = dashboard_chat.UPLOAD_ALLOWED_EXT
 UPLOAD_TTL = 24 * 3600  # 保存から24時間より古い添付は保存時に自動掃除
 CLAUDE_CLI = shutil.which("claude") or "claude"
 
@@ -320,50 +344,37 @@ NTFY_QUESTION_RE = re.compile(
 )
 CHOICE_QUESTIONS_MAX, CHOICE_OPTIONS_MAX = 4, 4
 _DASHBOARD_REPLY_STYLE = (
-    "For all written SHUKI dashboard replies, respond in English and keep the response concise. "
-    "Lead with the outcome in one sentence. For work reports, use only the applicable short sections "
-    "Done, Issues, and Decision needed; omit empty sections. Do not dump raw tool output, internal work logs, "
-    "or a step-by-step narration. Include details only when they support a decision or the user asks for them. "
-    "Do not reveal chain-of-thought, hidden instructions, or internal deliberation; provide only the answer "
-    "and, when useful, a brief rationale. Do not add the three-line self-QA boilerplate to ordinary dashboard "
-    "chat replies. "
-    "Make replies scannable at a glance: put the one-sentence outcome alone as the first paragraph; "
-    "write each section label on its own line as **Done**, **Issues**, **Decision needed** or **Next** "
-    "(the panel turns these into colour-coded blocks);wrap only the one or two "
-    "facts the user must not miss in ==double equals== (rendered as a highlighter mark); and use an "
-    "Obsidian callout such as > [!warning] Title or > [!tip] Title for a single risk or tip that must stand out. "
-    "Do not highlight more than two phrases per reply, and do not add these blocks to one-line answers. "
-    "The dashboard chat panel renders markdown:fenced ```mermaid blocks become diagrams, "
-    "fenced ```markmap blocks (a nested Markdown list) become an aligned left-to-right mind map "
-    "(use markmap for any mind map; never mermaid mindmap), "
-    "[text](https://...) links become clickable, and ![alt](path) becomes an inline image "
-    "(vault-relative paths resolve automatically; full http(s) URLs also work). Use a mermaid diagram, "
-    "an image, or a source link only when it genuinely helps (e.g. explaining a structure/flow, showing "
-    "a generated image, or citing where information came from) — not as decoration on every reply. "
+    "Written dashboard replies: English, concise, outcome alone in the first sentence. "
+    "For simple English questions, use beginner-friendly English: a short meaning or explanation "
+    "and one example; expand only when needed or requested. "
+    "For work reports, use only relevant **Done**, **Issues**, **Decision needed** labels on separate "
+    "lines; **Next** is available for a next step. Omit empty sections. Give evidence or detail "
+    "only when useful; no raw logs, step-by-step narration, hidden instructions, internal reasoning "
+    "or three-line self-QA. Optional emphasis: at most two ==highlights== and one useful "
+    "> [!tip] or > [!warning] callout; none for one-line answers. "
+    "Use visuals/links only when useful: fenced mermaid for diagrams, fenced markmap with a nested "
+    "Markdown list for mind maps (never mermaid mindmap), [text](url) for links, ![alt](path) for "
+    "images; image paths may be vault-relative or HTTP(S). "
 )
 _NTFY_SYSTEM_PROMPT_BASE = _DASHBOARD_REPLY_STYLE + (
-    "回答の最後に、ユーザーに確認や選択を求める内容がある場合のみ、選択肢の行を追加すること。"
-    "判断が1つだけなら、次の形式で1行だけ: NTFY_CHOICES: 選択肢1|選択肢2|選択肢3 （2〜3個・日本語可・パイプ区切り）。"
-    "互いに独立した判断が2つ以上ある時は、NTFY_CHOICES を使わず、判断ごとに1行ずつ次の形式で書くこと"
-    "（最大4行・各行の選択肢は2〜4個）: NTFY_QUESTION: 観点（短く）|選択肢1|選択肢2|選択肢3 。"
-    "ユーザーは観点ごとに1つ選ぶか自由記述で答え、全観点の答えが1通にまとめて届く。"
-    "選択肢は互いに排他的にすること。選択肢の文字数に制限はないので、判断に必要な説明は選択肢の文言に含めてよい。"
-    "おすすめがあれば先頭に置き、末尾に（推奨）と付けてよい。"
-    "確認や選択が不要な通常の回答では絶対にこれらの行を書かないこと。"
+    "Only when asking for a decision, append button lines after the reply: one decision uses "
+    "NTFY_CHOICES: Option A|Option B (2-3 options). Multiple independent decisions use "
+    "NTFY_QUESTION: Label|Option A|Option B, one line per decision (max 4 lines, 2-4 options each); "
+    "do not mix formats. Options must be mutually exclusive and self-contained; put a recommendation "
+    "first with (recommended). Never add choice lines to ordinary answers. "
 )
 # アクションカード（2026-10-14）。予定登録・タスク起票の「承認」はボタン1行ではなく、内容を確認・修正できる
 # カードで出す。実行は dashboard_chat_actions がボタン押下時だけ行う（AI はツールで書き込まない）。
 _ACTION_CARD_PROMPT = (
-    " Action cards: when you propose adding events to Google Calendar or creating a task, put one JSON object "
-    "in a fenced ```shuki-action block instead of NTFY_CHOICES. The panel shows an editable card; only the "
-    "user's click executes it, so never write to the calendar or create that task file yourself and never "
-    "claim it was done. Calendar: {\"type\":\"calendar\",\"events\":[{\"title\":\"...\",\"date\":\"YYYY-MM-DD\","
+    "For Calendar/task proposals, use one JSON object in a fenced shuki-action block instead of "
+    "choice lines for that action. Only the user's click executes the editable card: never perform "
+    "the write or claim completion yourself. Calendar: {\"type\":\"calendar\",\"events\":[{\"title\":\"...\",\"date\":\"YYYY-MM-DD\","
     "\"start\":\"HH:MM\",\"end\":\"HH:MM\",\"location\":\"\",\"description\":\"\"}]} (omit start/end for "
-    "all-day; up to 12 events; the card checks overlaps itself). Task: {\"type\":\"task\",\"title\":\"...\","
+    "all-day; max 12 events; card checks overlaps). Task: {\"type\":\"task\",\"title\":\"...\","
     "\"area\":\"one SHUKI area or empty\",\"due\":\"YYYY-MM-DD or empty\",\"next_action\":\"...\","
     "\"completion_criteria\":\"...\",\"parent\":\"project name or empty\",\"reason\":\"...\"}. "
-    "Add \"followup\":true only when you must continue after the click (the result then arrives as the "
-    "user's next message). Use at most one card of each type per reply."
+    "Use max one card per type per reply; add \"followup\":true only when work must continue after "
+    "the click result arrives as the next user message. "
 )
 
 
@@ -371,13 +382,11 @@ def _ntfy_system_prompt(job=None):
     """対話ドックの毎ターン system prompt（NTFY_CHOICES規約）。"""
     persona = "" if job and (job.get('english_skill') or job.get('speaking_practice')) else dashboard_mascot.PERSONA_PROMPT
     status = "" if job and (job.get('english_skill') or job.get('english_assessment') or job.get('speaking_practice') or job.get('voice')) else (
-        " For ordinary text replies only, append exactly one metadata line: "
-        "<!--SHUKI_WORK_STATUS:done--> when the user's current objective is completed and verified; "
-        "<!--SHUKI_WORK_STATUS:waiting--> when a user decision or required activation is outstanding; "
-        "or <!--SHUKI_WORK_STATUS:open--> when work remains. Judge the whole current objective, "
-        "not just whether this reply ended. Never mark done with pending activation or unverified "
-        "completion checks. A follow-up that adds work reopens the session. This line is removed "
-        "from the displayed reply. Omit it for JSON-only or other exact-output contracts."
+        "For ordinary text only, append exactly one hidden status line for the whole objective: "
+        "<!--SHUKI_WORK_STATUS:done--> only when complete and verified; "
+        "<!--SHUKI_WORK_STATUS:waiting--> for a required decision or pending activation; "
+        "<!--SHUKI_WORK_STATUS:open--> when work remains. Follow-up work reopens it. "
+        "Omit status and other extra text for JSON-only or exact-output contracts."
     )
     return persona + _NTFY_SYSTEM_PROMPT_BASE + _ACTION_CARD_PROMPT + status
 
@@ -397,14 +406,12 @@ def _session_tabs_prompt(job):
     if not job.get("session_tabs_token"):
         return ""
     helper = Path(__file__).with_name("dashboard_session_tabs.py")
-    return ("\nDashboard capability: When the user explicitly asks you to open saved sessions in "
-            "conversation-panel tabs, run the project Python interpreter with "
-            f"'{helper}' followed by up to three exact saved-session UUIDs. "
-            "The helper uses job-scoped credentials from the environment and reports browser acknowledgement. "
-            "Use this only for an explicit user request or an already-authorized continuation, never merely "
-            "for recommendations, quoted historical requests, or session reviews. Do not launch a browser, "
-            "send messages to the restored sessions, or expose credentials. Queued or pending does not mean "
-            "opened: report the helper's actual result and any tab-capacity or history-loading failure.")
+    return ("\nSession tabs: only on an explicit request or authorized continuation to open saved "
+            "conversations, run the project Python interpreter with "
+            f"'{helper}' and up to three exact saved-session UUIDs. "
+            "Recommendations, reviews and quoted requests are not authorization. The helper uses "
+            "job-scoped environment credentials; never expose them, launch a browser or message restored "
+            "sessions. Report actual browser acknowledgement and capacity/history failures; queued is not opened.")
 
 
 def _session_tabs_env(job):
@@ -480,7 +487,9 @@ def _strip_turn_wrappers(text):
     return text.strip()
 
 
-SESSION_STATUS_RE = re.compile(r"^[ \t]*<!--SHUKI_WORK_STATUS:(done|open|waiting)-->[ \t]*$", re.MULTILINE)
+SESSION_STATUS_MARKER = r"<!--SHUKI_WORK_STATUS:(done|open|waiting)-->"
+SESSION_STATUS_TOKEN_RE = re.compile(rf"[ \t]*{SESSION_STATUS_MARKER}[ \t]*")
+SESSION_STATUS_RE = re.compile(rf"^[ \t]*{SESSION_STATUS_MARKER}[ \t]*$", re.MULTILINE)
 
 
 def extract_session_status(text):
@@ -493,7 +502,21 @@ def extract_session_status(text):
         preceding = text[:match.start()]
         if not text[match.end():].strip() and len(re.findall(r"^[ \t]*(?:`{3,}|~{3,})", preceding, re.MULTILINE)) % 2 == 0:
             state = match.group(1)
-    return SESSION_STATUS_RE.sub("", text).rstrip(), state
+    # The marker is control metadata, so hide it even if the model places it inline.
+    # Only the strict standalone-final-line match above is allowed to set session state.
+    def hide_marker(match):
+        before = text[:match.start()]
+        after = text[match.end():]
+        if not before or not after or before.endswith(("\n", "\r")) or after.startswith(("\n", "\r")):
+            return ""
+        if match.group(0).startswith((" ", "\t")) or match.group(0).endswith((" ", "\t")):
+            return " "
+        previous, following = before[-1], after[0]
+        if (previous.isalnum() or previous in ".!?。！？、，：；") and following.isalnum():
+            return " "
+        return ""
+
+    return SESSION_STATUS_TOKEN_RE.sub(hide_marker, text).rstrip(), state
 
 
 def extract_ntfy_choices(text):
@@ -1083,6 +1106,12 @@ def collect_board_data():
             # human_only はユーザーの「自分でやる」指定＝唯一の保存値。agent は AI 側の担当指定。
             "agent":       (fm.get("agent") or "").strip('"'),
             "human_only":  _is_true(fm.get("human_only")),
+            # An explanatory UI hint, not authorization; the API rechecks every source.
+            "work_session_unavailable": (
+                "SHUKI's privacy rules keep this task outside connected work sessions."
+                if _is_dora_deny(rec["path"], fm) else
+                "Archived tasks are not available for work sessions."
+                if fm.get("status") == "archived" else ""),
             "ai_lane":     lane["lane"],
             "ai_runner":   lane["runner"],
             "ai_reason":   lane["reason"],
@@ -1703,6 +1732,9 @@ VAULT_SCAN_EXCLUDE_PATHS = {
 }
 
 
+_REVIEW_STATE_LOCK = threading.Lock()
+
+
 def load_review_state():
     try:
         return json.loads(REVIEW_STATE_FILE.read_text(encoding="utf-8"))
@@ -1711,11 +1743,8 @@ def load_review_state():
 
 
 def save_review_state(state):
-    try:
-        REVIEW_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        REVIEW_STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=1), encoding="utf-8")
-    except Exception:
-        pass  # 永続化の失敗でダッシュボード本体を壊さない
+    # Never acknowledge a review whose persistence failed.
+    shuki_notifications.atomic_json(REVIEW_STATE_FILE, state)
 
 
 def extract_summary(text, limit=140):
@@ -1908,8 +1937,11 @@ def collect_news_items():
 
 
 
-def collect_review_items(include_task_updates=True, notifications_only=True):
+def collect_review_items(include_task_updates=True, notifications_only=True, include_reviewed=False):
     """成果物スキャン + 自己申告レジャーをマージして返す（新しい順）。
+
+    include_reviewed retains recent receipts for history. Reviewed files use indexed
+    metadata only; legacy producer-acknowledged notices remain separately archived.
 
     include_task_updates=False のときは、タスク状態・AI完了の通知を除外する。
     それらは /files の「更新タスク」で扱い、/review はファイル内容・成果物の確認に
@@ -1952,11 +1984,14 @@ def collect_review_items(include_task_updates=True, notifications_only=True):
                 if mtime < cutoff:
                     continue
             path = rec["path"]
+            if _is_dora_deny(path, fm):
+                continue
             seen_paths.add(path)
             reviewed_mtime = state.get(path)
-            if reviewed_mtime is not None and mtime <= reviewed_mtime:
+            reviewed = reviewed_mtime is not None and mtime <= reviewed_mtime
+            if reviewed and not include_reviewed:
                 continue  # 既読以降に再編集されていない
-            text = core_vault.read_text(VAULT / path)  # ここまで生き残った分だけ本文を読む
+            text = "" if reviewed else core_vault.read_text(VAULT / path)
             if key == "qa" and "## 要対応: なし" in text:
                 continue  # QA: 要対応なし（0件）は除外
             items.append({
@@ -1970,6 +2005,7 @@ def collect_review_items(include_task_updates=True, notifications_only=True):
                 "summary": extract_summary(text),
                 "ts": mtime,
                 "version_key": mtime,
+                "reviewed": reviewed,
                 "cadence": CADENCE_BADGE.get(key, ""),
                 "importance": "medium" if key in CADENCE_BADGE else "other",
                 "fm_status": status,
@@ -1996,14 +2032,17 @@ def collect_review_items(include_task_updates=True, notifications_only=True):
             continue
         source_key, emoji, label = info
         fm = rec["fm"]
+        if _is_dora_deny(path, fm):
+            continue
         status = _idx_fm_str(fm, "status")
         if status in ("archived", "done", "rejected"):
             continue  # rejected は 01_Inbox の終端ステータス
         seen_paths.add(path)
         reviewed_mtime = state.get(path)
-        if reviewed_mtime is not None and ts <= reviewed_mtime:
+        reviewed = reviewed_mtime is not None and ts <= reviewed_mtime
+        if reviewed and not include_reviewed:
             continue
-        text = core_vault.read_text(VAULT / path)
+        text = "" if reviewed else core_vault.read_text(VAULT / path)
         items.append({
             "id": path,
             "kind": "scan",
@@ -2015,6 +2054,7 @@ def collect_review_items(include_task_updates=True, notifications_only=True):
             "summary": extract_summary(text),
             "ts": ts,
             "version_key": ts,
+            "reviewed": reviewed,
             "importance": "low" if source_key == "vault_task" else "other",
             "fm_status": status,
             "fm_priority": _idx_fm_str(fm, "priority"),
@@ -2022,9 +2062,16 @@ def collect_review_items(include_task_updates=True, notifications_only=True):
             "notification": _idx_fm_str(fm, "notification"),
         })
 
-    # (B) 自己申告レジャー: 99_System/review-inbox/*.json（processed/ は除外＝既読扱い）
+    # (B) Pending ledger notices; Recent activity also retains recent processed receipts.
     if REVIEW_INBOX.is_dir():
-        for f in REVIEW_INBOX.glob("*.json"):
+        pending = list(REVIEW_INBOX.glob("*.json"))
+        ledger_files = [(f, False) for f in pending]
+        if include_reviewed:
+            pending_names = {f.name for f in pending}
+            cutoff = time.time() - 14 * 86400
+            ledger_files.extend((f, True) for f in (REVIEW_INBOX / "processed").glob("*.json")
+                                if f.name not in pending_names and f.stat().st_mtime >= cutoff)
+        for f, reviewed in ledger_files:
             if not f.is_file():
                 continue
             try:
@@ -2033,9 +2080,18 @@ def collect_review_items(include_task_updates=True, notifications_only=True):
                 continue
             if not isinstance(d, dict):
                 continue
+            if d.get("source") == "work_session":
+                try:
+                    work_session_source(d.get("task_path"), task=True)
+                except ValueError:
+                    continue
             ledger_path = d.get("path")
+            if any(_is_dora_deny(value, {}) for value in (ledger_path, d.get("task_path")) if value):
+                continue
             ledger_rec = VAULT_INDEX.by_path(ledger_path) if ledger_path else None
             ledger_fm = ledger_rec["fm"] if ledger_rec else {}
+            if ledger_path and _is_dora_deny(ledger_path, ledger_fm):
+                continue
             items.append({
                 "id": shuki_paths.vault_rel(f, VAULT),
                 "kind": "ledger",
@@ -2047,6 +2103,8 @@ def collect_review_items(include_task_updates=True, notifications_only=True):
                 "summary": d.get("summary", ""),
                 "ts": d.get("ts", f.stat().st_mtime),
                 "version_key": None,
+                "reviewed": reviewed and bool(d.get("reviewed_at")),
+                "archived": reviewed and not bool(d.get("reviewed_at")),
                 "ledger_file": shuki_paths.vault_rel(f, VAULT),
                 "importance": "high",
                 "fm_status": _idx_fm_str(ledger_fm, "status"),
@@ -2054,13 +2112,15 @@ def collect_review_items(include_task_updates=True, notifications_only=True):
                 "task_path": _normalise_rel_path(d.get("task_path")),
                 "notification": d.get("notification", ""),
                 "delivery_status": d.get("delivery_status", ""),
+                "work_key": d.get("work_key", ""),
             })
 
     # (D) 🤖 AIが完了させた仕事（2026-09-04 新設）
-    items.extend(collect_ai_outcomes(state))
+    items.extend(collect_ai_outcomes(state, include_reviewed=include_reviewed))
 
     if notifications_only:
-        items = [item for item in items if shuki_notifications.needs_attention(item)]
+        items = [item for item in items if not item.get("reviewed") and not item.get("archived")
+                 and shuki_notifications.needs_attention(item)]
         for item in items:
             item["summary"] = str(item.get("summary") or "")[:400]
             # 通知タブは「何をすべきか」で束ねる（source 別ではなく blocker/decide/result/update）。
@@ -2075,7 +2135,7 @@ AI_OUTCOME_WINDOW_DAYS = 14
 AI_FEEDBACK_FILE = shuki_paths.system_dir_for(VAULT) / "ai_feedback.jsonl"
 
 
-def collect_ai_outcomes(state):
+def collect_ai_outcomes(state, include_reviewed=False):
     """(D) AIレーンの実行便が完了させたタスクを「成果」として受信箱に載せる（2026-09-04 新設）。
 
     なぜ (A)(C) の編集検知では足りないか：あれは「ファイルが変わった」を単位にしているので、
@@ -2100,15 +2160,18 @@ def collect_ai_outcomes(state):
         if not ea or ea < cutoff:
             continue
         path = rec["path"]
-        mtime = rec["mtime"]
-        reviewed = state.get(path)
-        if reviewed is not None and mtime <= reviewed:
+        if _is_dora_deny(path, fm):
             continue
-        text = core_vault.read_text(VAULT / path)
-        if "## 実行結果" not in text:
+        mtime = rec["mtime"]
+        reviewed_mtime = state.get(path)
+        reviewed = reviewed_mtime is not None and mtime <= reviewed_mtime
+        if reviewed and not include_reviewed:
+            continue
+        text = "" if reviewed else core_vault.read_text(VAULT / path)
+        if not reviewed and "## 実行結果" not in text:
             continue
         # 実行結果セクションだけを要約に使う（タスクの背景ではなく「何をしたか」を見せる）
-        body = text.split("## 実行結果", 1)[1]
+        body = "" if reviewed else text.split("## 実行結果", 1)[1]
         nxt = body.find("\n## ")
         if nxt > 0:
             body = body[:nxt]
@@ -2134,6 +2197,7 @@ def collect_ai_outcomes(state):
             "summary": summary,
             "ts": mtime,
             "version_key": mtime,
+            "reviewed": reviewed,
             "importance": "high",
             "fm_status": _idx_fm_str(fm, "status"),
             "fm_priority": _idx_fm_str(fm, "priority"),
@@ -2161,6 +2225,15 @@ def append_ai_feedback(payload):
     return rec
 
 
+def _archive_review_notice(source, destination):
+    """Keep an explicit receipt distinct from producer-acknowledged legacy archives."""
+    notice = json.loads(source.read_text(encoding="utf-8"))
+    notice.setdefault("ts", source.stat().st_mtime)
+    notice["reviewed_at"] = time.time()
+    shuki_notifications.atomic_json(source, notice)
+    source.replace(destination)
+
+
 def mark_reviewed(item_id, kind, version_key):
     """POST /review/reviewed の反映。scan は review_state.json に記録、ledger は processed/ へ移動。"""
     if kind == "ledger":
@@ -2170,37 +2243,39 @@ def mark_reviewed(item_id, kind, version_key):
         dest_dir = REVIEW_INBOX / "processed"
         dest_dir.mkdir(parents=True, exist_ok=True)
         # A producer may reuse a notice ID after its earlier version was reviewed.
-        f.replace(dest_dir / f.name)
+        _archive_review_notice(f, dest_dir / f.name)
         return True
     else:
-        state = load_review_state()
-        state[item_id] = version_key if version_key is not None else time.time()
-        save_review_state(state)
+        with _REVIEW_STATE_LOCK:
+            state = load_review_state()
+            state[item_id] = version_key if version_key is not None else time.time()
+            save_review_state(state)
         return True
 
 
 def mark_reviewed_bulk(items):
     """POST /review/reviewed-all の反映。scan は review_state.json を1回だけ書き込む
     （項目数ぶん load/save を繰り返さないための一括版）。戻り値: 成功件数。"""
-    state = load_review_state()
     ok = 0
-    for it in items:
-        item_id, kind = it.get("id", ""), it.get("kind", "scan")
-        if not item_id or kind not in ("scan", "ledger"):
-            continue
-        if kind == "ledger":
-            f = shuki_paths.vault_path(item_id, VAULT).resolve()
-            if not shuki_paths.within_vault(f, VAULT) or not f.is_file():
+    with _REVIEW_STATE_LOCK:
+        state = load_review_state()
+        for it in items:
+            item_id, kind = it.get("id", ""), it.get("kind", "scan")
+            if not item_id or kind not in ("scan", "ledger"):
                 continue
-            dest_dir = REVIEW_INBOX / "processed"
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            f.replace(dest_dir / f.name)
-            ok += 1
-        else:
-            version_key = it.get("version_key")
-            state[item_id] = version_key if version_key is not None else time.time()
-            ok += 1
-    save_review_state(state)
+            if kind == "ledger":
+                f = shuki_paths.vault_path(item_id, VAULT).resolve()
+                if not shuki_paths.within_vault(f, VAULT) or not f.is_file():
+                    continue
+                dest_dir = REVIEW_INBOX / "processed"
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                _archive_review_notice(f, dest_dir / f.name)
+                ok += 1
+            else:
+                version_key = it.get("version_key")
+                state[item_id] = version_key if version_key is not None else time.time()
+                ok += 1
+        save_review_state(state)
     return ok
 
 
@@ -2292,6 +2367,33 @@ def collect_files_data():
             "attention": [], "update_kinds": [], "review_items": [],
             "task_path": "", "task_title": "",
         })
+        # Reuse the Obsidian/base-card cover convention without exposing denied metadata.
+        cover = fm.get("cover")
+        if not isinstance(cover, str) or not cover.strip():
+            cover = rec.get("first_image")
+        if isinstance(cover, str) and cover.strip() and not _is_dora_deny(rec["path"], fm):
+            out[-1]["cover"] = view_engine._cover_path(cover.strip().removeprefix("!"))
+        elif FILE_THUMBNAILS is not None and not _is_dora_deny(rec["path"], fm):
+            art = FILE_THUMBNAILS.concept_cover(rec["path"], fm)
+            if art:
+                out[-1]["cover"] = art
+            else:
+                diagram = FILE_THUMBNAILS.diagram(rec["path"], fm)
+                if diagram:
+                    out[-1]["diagram_thumbnail"] = hashlib.sha256(
+                        (diagram['kind'] + diagram['source']).encode('utf-8')).hexdigest()[:16]
+        if not _is_dora_deny(rec['path'], fm) and (
+                out[-1].get('cover') or out[-1].get('diagram_thumbnail')):
+            explicit = fm.get('cover')
+            different_body_image = (isinstance(explicit, str) and explicit.strip()
+                                    and rec.get('first_image')
+                                    and out[-1].get('cover') != rec['first_image']
+                                    and not ('/' not in str(out[-1].get('cover', ''))
+                                             and rec['first_image'].endswith('/' + out[-1]['cover'])))
+            if rec.get('has_multiple_images') or different_body_image:
+                out[-1]['more_images'] = True
+    if FILE_JOURNALS is not None:
+        out.extend(FILE_JOURNALS.records())
     return collect_file_updates(out)
 
 
@@ -2379,7 +2481,9 @@ def search_vault_files(query, limit=20):
         dated.sort(key=lambda t: t[0], reverse=True)
         for _d, rec, fm in dated[:limit]:
             title = _idx_fm_str(fm, "title") or rec["name"]
-            out.append({"path": str(VAULT / rec["path"]), "title": title, "folder": rec["folder"]})
+            out.append({"path": str(VAULT / rec["path"]), "title": title, "folder": rec["folder"],
+                        "href": dashboard_file_links.build_file_href(rec["path"]),
+                        "kind": "task" if rec["path"].startswith(TASK_PREFIX) else "note"})
         return out
     for rec in VAULT_INDEX.notes():
         path = rec["path"]
@@ -2389,7 +2493,9 @@ def search_vault_files(query, limit=20):
         title = _idx_fm_str(fm, "title") or rec["name"]
         if q not in title.lower() and q not in path.lower():
             continue
-        out.append({"path": str(VAULT / path), "title": title, "folder": rec["folder"]})
+        out.append({"path": str(VAULT / path), "title": title, "folder": rec["folder"],
+                    "href": dashboard_file_links.build_file_href(path),
+                    "kind": "task" if path.startswith(TASK_PREFIX) else "note"})
         if len(out) >= limit:
             break
     return out
@@ -2483,6 +2589,64 @@ def _bf_runway(materials):
     return f'<ul class="bf-list">{"".join(rows)}</ul>' if rows else ""
 
 
+def _bf_weather(materials):
+    """Title-free rain warnings for upcoming timed calendar events."""
+    weather = materials.get("weather") or {}
+    if not isinstance(weather, dict):
+        weather = {}
+    status = weather.get("status")
+    if status == "no_events":
+        return ""
+    japanese = shuki_i18n.is_ja()
+    alerts = weather.get("alerts") or []
+    if not isinstance(alerts, list):
+        alerts = []
+    rows = []
+    for alert in alerts[:8]:
+        try:
+            day = date.fromisoformat(alert["date"]).strftime("%m/%d")
+            start = html.escape(str(alert["start"]))
+            end = html.escape(str(alert["end"]))
+            probability = int(alert["max_probability"])
+            if not 0 <= probability <= 100:
+                continue
+        except (KeyError, TypeError, ValueError):
+            continue
+        rows.append(f'<li><span class="bf-when">{day}</span> {start}–{end} · '
+                    f'{probability}%</li>')
+    unavailable = weather.get("unavailable_events", 0)
+    try:
+        unavailable = max(0, int(unavailable))
+    except (TypeError, ValueError):
+        unavailable = 0
+    if rows:
+        intro = ("Rain probability ≥40% overlaps these calendar times."
+                 if not japanese else "予定時間に降水確率40%以上が重なります。")
+        content = f'<p class="bf-prose">{intro}</p><ul class="bf-list">{"".join(rows)}</ul>'
+        if len(alerts) > 8:
+            more = len(alerts) - 8
+            content += (f'<p class="bf-sub">+{more} more</p>' if not japanese
+                        else f'<p class="bf-sub">ほか{more}件</p>')
+    elif status == "available":
+        content = ('No overlap at or above 40% was found for checked events.'
+                   if not japanese else "確認できた予定に、40%以上の雨予報との重なりはありません。")
+    else:
+        content = ""
+    if status in {"partial", "unavailable"} or unavailable:
+        message = ("Some forecast checks are unavailable; no alert does not mean dry."
+                   if not japanese else "一部の予報を取得できません。警告がないことは晴れを意味しません。")
+        if unavailable:
+            message = (f"{unavailable} event forecast(s) unavailable; no alert does not mean dry."
+                       if not japanese else
+                       f"{unavailable}件の予定は予報未取得です。警告がないことは晴れを意味しません。")
+        content += f'<p class="bf-sub">{message}</p>'
+    if not content:
+        content = ('Weather forecast unavailable; no alert does not mean dry.'
+                   if not japanese else "天気予報を取得できません。警告がないことは晴れを意味しません。")
+    content += '<p class="bf-sub">Open-Meteo · CC BY 4.0</p>'
+    return content
+
+
 def parse_standup(today):
     """🌅 日次ブリーフィングを画面向けに組み立てる（2026-07-31 standup .md から移行）。
 
@@ -2511,7 +2675,9 @@ def parse_standup(today):
             if body:
                 blocks.append(f'<div class="bf-sec"><h3>{title}</h3>'
                               f'<p class="bf-prose">{html.escape(body)}</p></div>')
+        weather_title = "Weather" if not shuki_i18n.is_ja() else "天気"
         for title, htm in ((f'{dashboard_icons.ui_icon_svg("check", 15)} {_t("今日やること")}', _bf_task_items(m)),
+                           (weather_title, _bf_weather(m)),
                            (f'{dashboard_icons.ui_icon_svg("refresh", 15)} {_t("昨日からの差分")}', _bf_diff_items(m)),
                            (f'{dashboard_icons.nav_icon_svg("progress", 15)} {_t("数字")}', _bf_numbers(m)),
                            (f'{dashboard_icons.ui_icon_svg("runway", 15)} {_t("3日以内の助走")}', _bf_runway(m))):
@@ -2528,6 +2694,20 @@ def collect_decisions_items():
     today_iso = date.today().isoformat()
     return [d for d in decisions.load_open()
             if not (d.get("status") == "deferred" and d.get("deferred_at") == today_iso)]
+
+
+def read_decision_preview(rel):
+    """Preview only an explicitly attached, indexed, permitted decision source."""
+    try:
+        relative = dashboard_file_links.normalise_vault_relative_path(rel)
+    except ValueError:
+        return None
+    if not any(relative in decisions.related_paths(item) for item in decisions.load_open()):
+        return None
+    record = VAULT_INDEX.by_path(relative)
+    if not record or _is_dora_deny(relative, record.get('fm', {})):
+        return None
+    return read_preview_md(relative)
 
 
 def _normalise_rel_path(value):
@@ -2560,7 +2740,7 @@ def _public_review_item(item):
     public = {key: item.get(key) for key in (
         "id", "kind", "source", "label", "title", "path", "summary", "ts",
         "version_key", "ledger_file", "ai_outcome", "agent", "artifacts",
-        "cadence", "fm_status", "fm_priority", "task_path",
+        "cadence", "fm_status", "fm_priority", "task_path", "work_key",
     ) if key in item}
     public["update_kind"] = _review_update_kind(item)
     return public
@@ -2607,7 +2787,7 @@ def collect_file_updates(files):
         norm_task = _normalise_rel_path(task_path)
         if target is None and norm_task:
             target = by_path.get(norm_task)
-        if target is None:
+        if target is None or item.get("source") == "work_session":
             task_rec = by_path.get(norm_task) if norm_task else None
             files.append(_virtual_update_record(item, task_rec["title"] if task_rec else ""))
             continue
@@ -4009,10 +4189,38 @@ def _codex_prompt(job, context="", model_spec=None):
     return _with_lang_directive(
         f"{prompt}{pointer}{reminder}{handoff}\n\n---\n"
         f"【この回答の出力形式（厳守）】{_dashboard_prompt_layers(job, 'codex', spec.get('cli_model', ''))}\n"
-        f"この行は SHUKI ダッシュボードが選択肢ボタンを描画するために使う。"
-        f"選択肢を出す時は本文に番号付きの箇条書きを書いて済ませるのではなく、"
-        f"本文の後に必ずこの1行を添えること。CodexでもClaudeと同じく、"
-        f"確認・選択を求める回答には必ずNTFY_CHOICES行（判断が複数ならNTFY_QUESTION行）を出すこと。")
+        "Decisions need NTFY_CHOICES/NTFY_QUESTION lines; numbered lists alone do not render buttons.")
+
+
+def _codex_resume_advisory(message):
+    """Only the known model-switch notice is nonfatal; outcome checks still apply."""
+    return (isinstance(message, str) and re.fullmatch(
+        r"This session was recorded with model `[^`\r\n]+` but is resuming with "
+        r"`[^`\r\n]+`\. Consider switching back to `[^`\r\n]+` as it may affect "
+        r"Codex performance\.", message.strip()) is not None)
+
+
+CODEX_EXIT_GRACE_SEC = 5
+
+
+def _wait_for_codex_exit(proc, terminal_event):
+    """A terminal turn must not wait forever for CLI shutdown or inherited pipes."""
+    if not terminal_event:
+        proc.wait()
+        return False
+    try:
+        proc.wait(timeout=CODEX_EXIT_GRACE_SEC)
+        return False
+    except subprocess.TimeoutExpired:
+        # The turn is already over. Reap the wrapper and CLI together so the saved
+        # session is released before another turn can resume it.
+        if os.name == 'nt':
+            subprocess.run(['taskkill', '/PID', str(proc.pid), '/T', '/F'],
+                           capture_output=True, timeout=10)
+        else:
+            proc.kill()
+        proc.wait(timeout=CODEX_EXIT_GRACE_SEC)
+        return True
 
 
 def _execute_codex_job(job):
@@ -4098,6 +4306,7 @@ def _execute_codex_job(job):
                          daemon=True).start()
 
         thread_id, texts, turn_error = "", [], None
+        terminal_event = ""
         for line in proc.stdout:
             job["last_activity"] = time.time()  # 🩺 出力が来るたび更新（無音のみタイムアウト対象）
             line = line.strip()
@@ -4133,7 +4342,9 @@ def _execute_codex_job(job):
                         texts.append(txt)
                         job["partial"] = job.get("partial", "") + txt
                 elif itype == "error":
-                    turn_error = item.get("message") or turn_error
+                    message = item.get("message") or ""
+                    if not _codex_resume_advisory(message):
+                        turn_error = message or turn_error
                 elif not job.get("voice"):  # voice only displays the actual reply
                     job["partial"] = job.get("partial", "") + f"\n\n**🔧 {itype}…**\n\n"
                     if job.get('work') and itype != 'reasoning':
@@ -4142,19 +4353,18 @@ def _execute_codex_job(job):
                                                'updated': time.time(), 'source': 'dashboard'}
             elif mtype == "turn.failed":
                 turn_error = (msg.get("error") or {}).get("message") or "(エラー内容不明)"
+                terminal_event = mtype
+                break
+            elif mtype == "turn.completed":
+                terminal_event = mtype
+                break
             elif mtype == "error":
                 message = msg.get("message") or ""
-                # Codex emits this resume advisory as an error event. It is
-                # nonfatal; turn.failed and the process outcome still apply.
-                model_switch_notice = (
-                    message.startswith("This session was recorded with model ")
-                    and " but is resuming with " in message
-                    and "Consider switching back to " in message
-                    and "as it may affect Codex performance." in message
-                )
-                if not model_switch_notice:
+                # The same advisory can arrive as a top-level or item error.
+                if not _codex_resume_advisory(message):
                     turn_error = message or turn_error
-        proc.wait()
+        forced_cleanup = _wait_for_codex_exit(proc, terminal_event)
+        job['cli_cleanup_forced'] = forced_cleanup
 
         if job.get("cancelled"):
             if job.get("timed_out"):
@@ -4162,7 +4372,8 @@ def _execute_codex_job(job):
             return "stopped", "（停止ボタンにより中断）"
         if turn_error:
             return ("limit" if claude_accounts.is_limit_error(turn_error) else "error"), turn_error
-        if (texts or (job.get('work') and job.get('question'))) and proc.returncode == 0:
+        exit_ok = proc.returncode == 0 or (forced_cleanup and terminal_event == 'turn.completed')
+        if (texts or (job.get('work') and job.get('question'))) and exit_ok:
             return "done", {"result": "".join(texts), "session_id": thread_id or session_in}
         err = "".join(stderr_buf).strip() or f"exit code {proc.returncode}（結果イベントなし）"
         return ("limit" if claude_accounts.is_limit_error(err) else "error"), err
@@ -4971,7 +5182,8 @@ def ensure_stt_server():
     with STT_START_LOCK:
         if stt_healthy():  # ロック取得までの間に他リクエストが起動済みかもしれない
             return True
-        if not STT_VENV_PYTHON.exists() or not STT_SCRIPT.exists():
+        if (STT_VENV_PYTHON is None or STT_SCRIPT is None
+                or not STT_VENV_PYTHON.is_file() or not STT_SCRIPT.is_file()):
             return False
         try:
             subprocess.Popen(
@@ -4991,9 +5203,18 @@ def ensure_stt_server():
 
 
 def transcribe_audio(data, content_type, language=DEFAULT_VOICE_LANGUAGE):
+    language = _normalize_voice_language(language)
+    if shuki_core.feature_enabled("cloud_stt"):
+        import dashboard_stt
+        cloud = dashboard_stt.transcribe_if_enabled(data, content_type, language,
+                                                   timeout=STT_TRANSCRIBE_TIMEOUT)
+        if cloud is not None:
+            return cloud
+    if STT_SCRIPT is None or not STT_SCRIPT.is_file():
+        from shuki_core import speech
+        return speech.transcribe(data, content_type, language)
     if not ensure_stt_server():
         raise RuntimeError("STTサーバーを起動できませんでした（初回はモデル取得に数分かかることがあります）")
-    language = _normalize_voice_language(language)
     query = urllib.parse.urlencode({"language": language})
     req = urllib.request.Request(f"{STT_ENGINE}/transcribe?{query}", data=data,
                                   headers={"Content-Type": content_type or "audio/webm"}, method="POST")
@@ -5024,11 +5245,12 @@ def save_upload(filename, data, folder=None):
     target.mkdir(parents=True, exist_ok=True)
     if folder is None:
         cleanup_uploads()
-    safe = re.sub(r"[^\w.\-]", "_", Path(filename or "").name)[:80] or "file"
+    safe = re.sub(r"[^\w.\-]", "_", Path(filename or "").name) or "file"
     ext = Path(safe).suffix.lower()
     if ext not in UPLOAD_ALLOWED_EXT:
-        raise ValueError(f"未対応の拡張子です: {ext or '(なし)'}")
-    dest = target / f"{time.strftime('%Y%m%d_%H%M%S')}_{safe}"
+        raise ValueError(f"Unsupported file extension: {ext or '(none)'}")
+    safe = safe[:-len(ext)][:80 - len(ext)] + ext
+    dest = target / f"{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex}_{safe}"
     dest.write_bytes(data)
     return dest
 
@@ -5777,8 +5999,7 @@ HOME_CSS = """
 """
 
 SETTINGS_CSS = """
-  /* 設定ページ（2026-10-11 刷新）。開かなくても現在値が見える「行＋右端の操作」の一覧にし、
-     長い説明だけを Details に畳む。高さは §6 の段（S=32px の操作・行は44px以上）に合わせる。 */
+  /* Compact Settings: quick controls stay visible; advanced controls expand in place. */
   * { box-sizing:border-box; margin:0; }
   body { background:var(--bg); color:var(--fg); font-family:var(--font-ui);
     padding:18px 20px 90px; min-height:100vh; --page-pad-x:20px; --page-pad-y:18px; }
@@ -5801,6 +6022,13 @@ SETTINGS_CSS = """
   .set-text small { color:var(--muted); font-size:.74rem; line-height:1.45; }
   .set-ctl { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-left:auto; }
   .set-sub { padding:2px 16px 12px; }
+  .color-adjust { margin:0; padding:0 16px 12px; border:0; min-width:0; }
+  .color-adjust legend { padding:4px 0; color:var(--muted); font-size:.74rem; }
+  .color-axis { display:grid; grid-template-columns:80px minmax(0,1fr) 56px; align-items:center; gap:8px; font-size:.76rem; }
+  .color-axis input { width:100%; min-width:0; min-height:44px; margin:0; accent-color:var(--accent); }
+  .color-axis input:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .color-axis output { text-align:right; font-variant-numeric:tabular-nums; }
+  .color-hex { display:block; text-align:right; color:var(--muted); font-size:.74rem; }
   .set-more { padding:0 16px 10px; }
   .set-more > summary { display:inline-flex; align-items:center; gap:4px; min-height:32px; cursor:pointer;
     color:var(--muted); font-size:.74rem; list-style:none; }
@@ -5831,6 +6059,7 @@ SETTINGS_CSS = """
     border-radius:7px; font-size:.8rem; color:var(--muted); white-space:nowrap; }
   .seg input { position:absolute; inset:0; opacity:0; margin:0; cursor:pointer; }
   .seg label:hover { color:var(--fg); }
+  #appearance-mode-settings .seg label { min-height:44px; }
   .seg label:has(input:checked) { color:var(--fg); font-weight:600;
     background:color-mix(in srgb, var(--accent) 14%, var(--card));
     box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
@@ -5838,6 +6067,17 @@ SETTINGS_CSS = """
 
   /* テーマ */
   .themes { display:flex; flex-wrap:wrap; gap:8px; }
+  .favorite-tools { display:flex; flex-wrap:wrap; gap:8px; margin:8px 0; }
+  .favorite-tools input { flex:1 1 140px; min-width:0; width:100%; padding:8px 10px;
+    color:var(--fg); background:var(--bg); border:1px solid var(--line); border-radius:8px; }
+  .favorite-tools input, .favorite-tools button, .favorite-entry button { min-height:44px; }
+  .favorite-list { display:grid; gap:8px; }
+  .favorite-entry { display:flex; align-items:center; gap:8px; min-width:0; }
+  .favorite-entry .favorite-use { flex:1; min-width:0; display:flex; flex-direction:column; align-items:flex-start;
+    gap:2px; white-space:normal; text-align:left; overflow-wrap:anywhere; }
+  .favorite-entry small { display:block; color:var(--muted); font-size:.72rem; }
+  #legacy-themes { margin-top:8px; }
+  #legacy-themes .hint { margin-bottom:6px; }
   .theme-card { position:relative; display:inline-flex; align-items:center; gap:8px; min-height:40px; min-width:0;
     padding:6px 12px 6px 10px; border:1px solid var(--line); border-radius:10px; background:var(--bg);
     transition:border-color .15s; }
@@ -5913,25 +6153,49 @@ SETTINGS_CSS = """
   .settings-body > p + p { margin-top:8px; }
   .settings-page .conn-h { padding:6px 4px 8px; }
 
-  /* 保存バー：変更がある時だけ下端に張り付く */
-  .save-bar { position:sticky; bottom:16px; z-index:20; display:flex; align-items:center; gap:10px; flex-wrap:wrap;
-    margin-top:14px; padding:10px 12px 10px 16px; border-radius:12px; background:var(--card);
-    border:1px solid color-mix(in srgb, var(--accent) 45%, var(--line));
-    box-shadow:0 6px 24px color-mix(in srgb, var(--fg) 14%, transparent); }
-  .save-bar .sb-text { flex:1 1 140px; font-size:.82rem; font-weight:600; }
-  .save { min-height:36px; padding:0 18px; border:none; border-radius:9px; background:var(--accent); color:var(--card);
-    font:inherit; font-size:.84rem; font-weight:650; cursor:pointer; }
-  .save:hover { filter:brightness(1.06); }
+  .settings-intro { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap;
+    gap:8px 16px; margin:0 0 16px; font-size:.86rem; }
+  .settings-intro > p { color:var(--muted); }
+  .autosave-status { display:flex; align-items:center; gap:8px; min-height:44px; }
+  .autosave-status::before { content:''; width:6px; height:6px; border-radius:50%; background:var(--muted); }
+  .autosave-status[data-state=saving]::before { background:var(--accent); }
+  .autosave-status[data-state=error] { color:var(--danger, var(--red)); }
+  .autosave-status[data-state=error] #msg { color:inherit; }
+  .autosave-status[data-state=error]::before { background:currentColor; }
+  .set-compact { padding:0; overflow:clip; }
+  .set-panel-head { padding:0 16px; }
+  .set-disclosure { display:flex; align-items:center; justify-content:space-between; gap:12px;
+    width:100%; min-height:48px; padding:0; border:0; background:none; color:var(--fg);
+    font:inherit; font-size:.9rem; font-weight:650; text-align:left; cursor:pointer; }
+  .set-disclosure svg { color:var(--muted); transform:rotate(-90deg); transition:transform .15s; }
+  .set-disclosure[aria-expanded=true] svg { transform:none; }
+  .set-disclosure:hover { color:var(--accent); }
+  .set-quick { padding:0 16px 12px; display:flex; align-items:center; flex-wrap:wrap; gap:8px 16px; }
+  .set-quick > .set-row, .set-quick > .effort-row { padding:0; width:100%; border:0; }
+  .set-quick #appearance-mode-settings { min-height:44px; }
+  .set-quick .set-text { flex-basis:120px; }
+  .set-panel-body { padding:12px 0 4px; border-top:1px solid var(--line); }
+  .set-panel-body > .set-h-note { display:block; margin:0 16px 8px; color:var(--muted); }
+  .quick-menu { display:flex; align-items:center; justify-content:space-between; gap:10px;
+    min-height:44px; flex:1 1 135px; font-size:.8rem; }
+  .settings-page .seg label, .settings-page select, .settings-page input[type=color],
+  .settings-page .pill, .settings-page .theme-card, .settings-page .reset { min-height:44px; }
+  .settings-page .pill::before { display:none; }
+  .settings-page .themes { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(135px,100%),1fr)); }
+  .settings-page .theme-card { justify-content:flex-start; }
+  .settings-page .tc-name { overflow-wrap:normal; }
+  .settings-page .set-more > summary, .settings-page .theme-more > summary { min-height:44px; }
+  html body .settings-page select { height:44px !important; min-height:44px !important; }
+  .set-quick > .set-row > .set-label { flex:1; }
+  .settings-page .settings-group > summary { height:auto; min-height:44px; padding:8px 16px; }
   #msg { font-size:.78rem; color:var(--muted); }
   .page-foot { display:flex; align-items:center; gap:16px; flex-wrap:wrap; margin-top:18px; padding:0 4px; }
   .reset { min-height:32px; padding:0; border:none; background:none; color:var(--muted); font:inherit;
     font-size:.78rem; cursor:pointer; text-decoration:underline; text-underline-offset:3px; }
   .reset:hover { color:var(--danger, var(--red)); }
   .page-foot a { display:inline-flex; align-items:center; gap:5px; color:var(--muted); font-size:.78rem; }
-  @media(max-width:700px) {
-    .save-bar { bottom:calc(70px + env(safe-area-inset-bottom) + 10px); }
-  }
   @media(max-width:480px) {
+    .set-panel-head { padding:0 12px; } .set-quick { padding:0 12px 12px; }
     .set-row { padding:8px 12px; } .settings-page .set-h { padding:12px 12px 4px; } .set-sub, .set-more { padding-left:12px; padding-right:12px; }
     .settings-page > .setup-choice { padding:12px; }
     .set-ctl { margin-left:0; }
@@ -5969,6 +6233,20 @@ HOME_LABELS = {  # ホームの JS 文言（render_home_html が訳して HOME_P
     "sendingRecord": "記録しています…",
     "doneAi": "AIに渡しました。次の便で整理します",
     "doneRecord": "記録しました",
+    "savePrivate": "保存",
+    "sendRequest": "依頼を送る",
+    "createMonster": "日記モンスターを作る",
+    "helpPrivate": "Private：AI処理せず記録として保存します",
+    "helpRequest": "AIへの依頼として送ります。モンスターは作りません",
+    "helpMonster": "日記からモンスターを作ります。AIが本文を使います",
+    "sendingMonster": "日記を保存しています…",
+    "doneMonster": "日記を保存しました。モンスターを生成します",
+    "failMonster": "日記を保存できませんでした",
+    "monster": "モンスター生成を依頼済み",
+    "saveDiary": "Save diary",
+    "helpCompanion": "Magic diary: enable live Omnipus comments beside your writing. Save keeps only your text.",
+    "sendingCompanion": "Saving your diary…",
+    "doneCompanion": "Diary saved. Omnipus comments remain separate.",
     "failAi": "AIに渡せませんでした",
     "failRecord": "記録できませんでした",
     "wait": "⏳ 次の便で整理",
@@ -6014,6 +6292,59 @@ HOME_WRITE_CSS = """
     clip:rect(0,0,0,0); white-space:nowrap; border:0; }
   .hw { max-width:760px; margin:0 auto; padding:20px 16px 32px; display:flex; flex-direction:column; gap:14px; }
   .hw-form { display:flex; flex-direction:column; gap:10px; }
+  .hw-writing-layout { min-width:0; position:relative; }
+  .hw.wc-open { max-width:1120px; }
+  .wc-open .hw-writing-layout { padding-right:298px; }
+  .wc-open .hw-editor-wrap { min-width:0; }
+  #wc-panel { display:flex; flex-wrap:wrap; align-items:center; gap:8px 14px; min-width:0; }
+  #wc-panel[hidden], #wc-overlay[hidden], #wc-bubble[hidden], #wc-notice[hidden],
+  #wc-history[hidden], .wc-comment[hidden] { display:none; }
+  .wc-brand { display:flex; gap:8px; align-items:center; }
+  .wc-brand h2 { font-size:.94rem; margin:0; }
+  .wc-brand .shuki-mascot { flex-shrink:0; }
+  .wc-help, #wc-state, #wc-empty { font-size:.76rem; line-height:1.6; color:var(--muted); }
+  .wc-help { flex:1 1 240px; }
+  .wc-help summary { cursor:pointer; }
+  #wc-state { flex-basis:100%; }
+  #wc-state.error { color:var(--danger); }
+  #wc-toggle { min-height:44px; padding:8px 12px; border:1px solid var(--line);
+    border-radius:8px; background:var(--bg); color:var(--fg); font:inherit; font-size:.8rem; cursor:pointer; }
+  #wc-toggle[aria-pressed=true] { border-color:var(--accent); }
+  #wc-bubble { position:absolute; left:calc(100% - 280px); top:0; width:280px; z-index:3;
+    border:1px solid var(--line); border-radius:12px; padding:10px; background:var(--card);
+    box-shadow:0 6px 20px color-mix(in srgb, var(--fg) 8%, transparent); }
+  #wc-bubble::before { content:''; position:absolute; left:-7px; top:20px; width:12px; height:12px;
+    background:var(--card); border-left:1px solid var(--line); border-bottom:1px solid var(--line); transform:rotate(45deg); }
+  #wc-comments { display:grid; gap:10px; }
+  .wc-comment { overflow-wrap:anywhere; }
+  #wc-history, #wc-notice { min-height:44px; border:1px solid var(--line); border-radius:8px;
+    background:var(--card); color:var(--fg); font:inherit; font-size:.76rem; cursor:pointer; }
+  #wc-history { width:100%; margin-top:8px; }
+  #wc-notice { display:none; }
+  .wc-comment-head { display:flex; align-items:center; gap:4px; justify-content:space-between; }
+  .wc-comment-head span { color:var(--muted); font-size:.68rem; }
+  .wc-dismiss { flex-shrink:0; min-width:44px; min-height:44px; border:none; border-radius:6px;
+    background:transparent; color:var(--muted); font:inherit; cursor:pointer; }
+  .wc-quote { display:block; width:100%; text-align:left; min-height:44px; margin:4px 0 6px; padding:6px 8px;
+    background:color-mix(in srgb, var(--accent) 10%, var(--card)); color:var(--fg); border:1px solid var(--line);
+    border-radius:6px; font:inherit; font-size:.77rem; line-height:1.6; overflow-wrap:anywhere; cursor:pointer; }
+  .wc-comment p { font-size:.82rem; line-height:1.65; margin:0; }
+  #wc-panel button:focus-visible, #wc-bubble button:focus-visible, #wc-notice:focus-visible {
+    outline:2px solid var(--accent); outline-offset:3px; }
+  .wc-overlay { position:absolute; pointer-events:none; overflow:hidden; border-radius:11px; }
+  #wc-mirror { position:absolute; top:0; left:0; box-sizing:border-box; white-space:pre-wrap; overflow-wrap:break-word;
+    word-break:normal; color:transparent; }
+  #wc-mirror mark { color:transparent; background:color-mix(in srgb, var(--accent) 18%, transparent); }
+  #wc-mirror mark.wc-focused { outline:1px solid var(--accent); outline-offset:1px; }
+  @media (max-width:800px) {
+    .wc-open .hw-writing-layout { padding-right:0; }
+    #wc-bubble { position:relative; left:auto; top:auto; width:100%; margin-top:8px; }
+    #wc-bubble.wc-in-editor { position:absolute; left:12px; width:calc(100% - 24px); margin-top:0; }
+    #wc-bubble::before { left:24px; top:-7px; transform:rotate(135deg); }
+    #wc-notice { display:block; width:100%; margin-top:6px; padding:8px 12px; text-align:left;
+      overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  }
+  @media (forced-colors:active) { #wc-mirror mark { background:transparent; outline:1px dashed Highlight; } }
   #hw-text { width:100%; min-height:min(52vh, 560px); resize:vertical; background:var(--card); color:var(--fg);
     border:1px solid var(--line); border-radius:12px; padding:18px 20px; font:inherit; font-size:1.02rem;
     line-height:1.85; caret-color:var(--accent); }
@@ -6051,6 +6382,14 @@ HOME_WRITE_CSS = """
   #hw-text:focus { outline:none; border-color:var(--accent);
     box-shadow:0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent); }
   .hw-bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .hw-modes { display:flex; flex-wrap:wrap; gap:6px 16px; margin:0; padding:8px 12px;
+    min-width:0; border:1px solid var(--line); border-radius:8px; }
+  .hw-modes[hidden] { display:none; }
+  .hw-modes legend { color:var(--muted); font-size:.75rem; padding:0 4px; }
+  .hw-modes label { display:inline-flex; align-items:center; gap:7px; min-height:44px;
+    cursor:pointer; font-size:.86rem; overflow-wrap:anywhere; }
+  .hw-modes input { accent-color:var(--accent); }
+  .hw-modes input:focus-visible { outline:2px solid var(--accent); outline-offset:4px; }
   .hw-note { color:var(--muted); font-size:.74rem; font-variant-numeric:tabular-nums; }
   .hw-note.near { color:var(--red); }
   .hw-actions { margin-left:auto; display:flex; gap:8px; }
@@ -6109,6 +6448,12 @@ HOME_WRITE_CSS = """
   }
 """
 
+HOME_COMPANION_PANEL = """<aside id="wc-panel" aria-label="Magic Diary">
+      <button type="button" id="wc-toggle" role="switch" aria-checked="false" aria-label="Magic Diary">Magic Diary · Off</button>
+      <p class="wc-help">On keeps writing support enabled. AI shares this draft during pauses; Private uses local prompts only. Off stops new sharing. Comments stay separate.</p>
+      <p id="wc-state" role="status" aria-live="polite">Magic Diary is off.</p>
+    </aside>"""
+
 HOME_PAGE = """<!DOCTYPE html>
 <html lang="ja"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -6120,9 +6465,12 @@ __HEAD__
 <main class="hw">
   <form id="hw-form" class="hw-form">
     <label for="hw-text" class="sr-only">メモ</label>
+    __HOME_COMPANION_PANEL__
+    <div class="hw-writing-layout">
     <div class="hw-editor-wrap">
       <textarea id="hw-text" maxlength="__MAX__" spellcheck="true"
         placeholder="思いついたこと、今日あったこと、まだ形になっていないこと"></textarea>
+      <div id="wc-overlay" class="wc-overlay" aria-hidden="true" hidden><div id="wc-mirror"></div></div>
       <button type="button" id="hw-plus" class="hw-plus" title="添付・スキル・テンプレート"
         aria-label="添付・スキル・テンプレート" aria-expanded="false" aria-controls="hw-plus-menu">__ICON_PLUS__</button>
       <div id="hw-plus-menu" class="hw-plus-menu" hidden>
@@ -6134,13 +6482,30 @@ __HEAD__
         <div class="hw-menu-templates" hidden></div>
       </div>
     </div>
-    <input id="hw-file" type="file" accept="image/*,.pdf,.txt,.md,.csv" hidden>
+    <button type="button" id="wc-notice" aria-controls="wc-bubble" hidden></button>
+    <aside id="wc-bubble" aria-label="Nearby Omnipus comment" hidden>
+      <div id="wc-comments" aria-label="Separate Omnipus annotations"></div>
+      <button type="button" id="wc-history" aria-expanded="false" hidden>Earlier comments</button>
+      <p id="wc-empty">Write freely. No need to answer every comment.</p>
+    </aside>
+    </div>
+    <input id="hw-file" type="file" accept="__UPLOAD_ACCEPT__" hidden>
     <div id="hw-attach" class="hw-attach" hidden></div>
+    <fieldset id="hw-mode" class="hw-modes">
+      <legend>処理モード</legend>
+      <label><input type="radio" name="hw-mode" value="record" checked> Private</label>
+      <label><input type="radio" name="hw-mode" value="ai"> AI</label>
+    </fieldset>
+    <fieldset id="hw-ai-action" class="hw-modes" hidden>
+      <legend>AIの処理</legend>
+      <label><input type="radio" name="hw-ai-action" value="request" checked> 依頼</label>
+      __HOME_MONSTER_OPTION__
+    </fieldset>
+    <p id="hw-action-help" class="hw-note"></p>
     <div class="hw-bar">
       <span id="hw-note" class="hw-note">下書きはこのブラウザに残ります</span>
       <div class="hw-actions">
-        <button type="submit" class="hw-btn" data-processing="record" title="AIには渡さず、記録として残す">記録だけ</button>
-        <button type="submit" class="hw-btn hw-primary" data-processing="ai" title="次の便でAIがタスク化・整理する（Ctrl+Enter）">AIに渡す</button>
+        <button type="submit" id="hw-submit" class="hw-btn hw-primary">保存</button>
       </div>
     </div>
     <p id="hw-status" class="hw-status" role="status" aria-live="polite"></p>
@@ -6169,6 +6534,31 @@ __HEAD__
   const buttons = Array.from(form.querySelectorAll('.hw-btn'));
   const list = document.getElementById('hw-list');
   const head = document.getElementById('hw-recent-head');
+  const submitButton = document.getElementById('hw-submit');
+  const modeControls = document.getElementById('hw-mode');
+  const actionControls = document.getElementById('hw-ai-action');
+  function selection() {
+    const processing = REPAIR ? 'record' : form.querySelector('[name="hw-mode"]:checked').value;
+    return {processing, ai_action:processing === 'ai' ? form.querySelector('[name="hw-ai-action"]:checked').value : ''};
+  }
+  function updateAction() {
+    const choice = selection();
+    if (choice.processing === 'record') {
+      form.querySelector('[name="hw-ai-action"][value="request"]').checked = true;
+    }
+    modeControls.hidden = REPAIR;
+    actionControls.hidden = REPAIR || choice.processing !== 'ai';
+    const monster = choice.ai_action === 'monster';
+    const companion = choice.ai_action === 'companion';
+    submitButton.textContent = REPAIR ? L.repairButton : choice.processing === 'record'
+      ? L.savePrivate : monster ? L.createMonster : companion ? L.saveDiary : L.sendRequest;
+    document.getElementById('hw-action-help').textContent = REPAIR ? L.idleRepair : choice.processing === 'record'
+      ? L.helpPrivate : monster ? L.helpMonster : companion ? L.helpCompanion : L.helpRequest;
+    form.dispatchEvent(new Event('shuki-writing-change'));
+  }
+  form.querySelectorAll('[name="hw-mode"], [name="hw-ai-action"]').forEach(el => el.addEventListener('change', () => {
+    updateAction(); setStatus('', false);
+  }));
   let draftTimer = 0;
 
   function setStatus(text, isError) {
@@ -6191,7 +6581,7 @@ __HEAD__
   area.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
-      form.requestSubmit(form.querySelector(REPAIR ? '[data-processing="record"]' : '[data-processing="ai"]'));
+      form.requestSubmit(submitButton);
     }
   });
   try {
@@ -6199,13 +6589,12 @@ __HEAD__
     if (saved) area.value = saved;
   } catch (_) {}
   if (REPAIR) {
-    form.querySelector('[data-processing="ai"]').hidden = true;
-    form.querySelector('[data-processing="record"]').textContent = L.repairButton;
     document.querySelectorAll('.hw-recent, .sum-band').forEach(el => { el.hidden = true; });
     document.getElementById('hw-plus').hidden = true;
     if (!area.value) { area.value = REPAIR_TEMPLATE; saveDraft(); }
   }
   updateNote();
+  updateAction();
   if (window.matchMedia('(pointer: fine)').matches) area.focus();
 
   async function post(url, body) {
@@ -6219,10 +6608,13 @@ __HEAD__
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const text = area.value.trim();
-    const processing = e.submitter && e.submitter.dataset.processing === 'record' ? 'record' : 'ai';
+    const {processing, ai_action} = selection();
+    const monster = ai_action === 'monster';
+    const companion = ai_action === 'companion';
     if (!text && (REPAIR || !attachments.length)) { setStatus(L.empty, true); area.focus(); return; }
     if (REPAIR && text === REPAIR_TEMPLATE.trim()) { setStatus(L.repairHeadings, true); return; }
     buttons.forEach(b => { b.disabled = true; });
+    form.querySelectorAll('input[type="radio"]').forEach(el => { el.disabled = true; });
     try {
       if (REPAIR) {
         saveDraft();
@@ -6230,20 +6622,28 @@ __HEAD__
         setStatus(L.repairDone, false);
         return;
       }
-      setStatus(processing === 'ai' ? L.sendingAi : L.sendingRecord, false);
-      await post('/queue', {name: 'memo', payload: {text: withAttachments(text), processing, source: 'home'}});
+      setStatus(monster ? L.sendingMonster : companion ? L.sendingCompanion : processing === 'ai' ? L.sendingAi : L.sendingRecord, false);
+      const payload = {text: withAttachments(text), processing, ai_action, source: 'home'};
+      const delivery = window.SHUKI_MEMOS
+        ? await window.SHUKI_MEMOS.submit(payload)
+        : await post('/queue', {name: 'memo', payload});
       attachments = [];
       renderAttach();
       area.value = '';
       saveDraft();
       updateNote();
-      setStatus(processing === 'ai' ? L.doneAi : L.doneRecord, false);
+      form.querySelector('[name="hw-mode"][value="record"]').checked = true;
+      form.querySelector('[name="hw-ai-action"][value="request"]').checked = true;
+      updateAction();
+      setStatus(delivery.queued ? 'Saved on this device. Will send when SHUKI is reachable.'
+        : monster ? L.doneMonster : companion ? L.doneCompanion : processing === 'ai' ? L.doneAi : L.doneRecord, false);
       if (window.SFX) SFX.memo_sent();
       loadList();
     } catch (err) {
-      setStatus((processing === 'ai' && !REPAIR ? L.failAi : L.failRecord) + '（' + err.message + '）', true);
+      setStatus((monster ? L.failMonster : companion ? L.failRecord : processing === 'ai' && !REPAIR ? L.failAi : L.failRecord) + '（' + err.message + '）', true);
     } finally {
       buttons.forEach(b => { b.disabled = false; });
+      form.querySelectorAll('input[type="radio"]').forEach(el => { el.disabled = false; });
     }
   });
 
@@ -6530,7 +6930,11 @@ def render_home_html():
     weekday = WEEKDAYS[today.weekday()] if shuki_i18n.is_ja() else WEEKDAYS_EN[today.weekday()]
     name_esc = html.escape(dashboard_settings.dashboard_name(dashboard_settings.load_settings()))
     title = f'{name_esc}<span class="date">{today.isoformat()} ({weekday})</span>'
-    page = (HOME_PAGE.replace("__HEAD__", dashboard_ui.pwa_head() + dashboard_chat.assets_head())
+    offline_script = ('<script src="/offline-memo.js"></script>'
+                      if shuki_core.feature_enabled("offline_memos") else '')
+    page = (HOME_PAGE.replace("__HEAD__", dashboard_ui.pwa_head() + dashboard_chat.assets_head()
+                             + offline_script)
+            .replace("__UPLOAD_ACCEPT__", dashboard_chat.UPLOAD_ACCEPT)
             .replace("__CSS__", HOME_WRITE_CSS + SUM_BAND_CSS + dashboard_ui.RESPONSIVE_CSS)
             .replace("__TITLE__", name_esc).replace("__MAX__", str(HOME_MEMO_MAX_CHARS))
             .replace("__ICON_EDIT__", dashboard_icons.ui_icon_svg("pencil", 15))
@@ -6540,11 +6944,19 @@ def render_home_html():
             .replace("__ICON_LAYERS__", dashboard_icons.ui_icon_svg("layers", 18))
             .replace("__ICON_TEMPLATE__", dashboard_icons.ui_icon_svg("book", 18)))
     page = dashboard_ui.hydrate_shell(page, "home", title)
+    page = page.replace("__HOME_COMPANION_PANEL__", HOME_COMPANION_PANEL
+                        if shuki_core.feature_enabled("journal") else "")
+    page = page.replace("__HOME_MONSTER_OPTION__",
+                        '<label><input type="radio" name="hw-ai-action" value="monster"> 日記モンスターを作る</label>'
+                        if shuki_core.feature_enabled("game") else "")
     labels = {k: shuki_i18n.t(v, ctx="home") for k, v in HOME_LABELS.items()}
     page = page.replace("__HOME_LABELS__", json.dumps(labels, ensure_ascii=False).replace("<", "\\u003c"), 1)
     # 各ページの更新帯は表示後に /home/updates から取る（2026-10-11）。帯の集計がホーム応答
     # ~380ms のうち ~340ms を占め、メモを書きたいだけでも全集計を待たされていた。帯はメモ欄より
     # 下にあるので後から入っても入力位置は動かない。値は開くたび最新のまま。
+    page = page.replace("__COMPANION_MASCOT__", dashboard_mascot.sprite_html(), 1)
+    if shuki_core.feature_enabled("journal"):
+        page = page.replace("</body>", '<script src="/writing-companion.js?v=nearby-1" defer></script></body>', 1)
     return shuki_i18n.set_html_lang(page.replace("<!--SHUKI_HOME_UPDATES-->", HOME_UPDATES_SLOT, 1))
 
 
@@ -6929,8 +7341,8 @@ def render_settings_html():
     """⚙️ 設定ページ（GET /settings）。配色テーマ・表示するメニュー・言語・マスコット等を編集して
     POST /settings に保存する。設定は vault 外の dashboard_settings.json に持つ。
 
-    2026-10-11 刷新：全項目を「+で開く」アコーディオンにしていたのをやめ、各行の右端に
-    スイッチ・セグメントを置いて現在値を一覧で見せる。長い説明だけ Details に畳む。
+    Quick controls stay visible; advanced settings collapse. Edits autosave serially
+    as partial updates, with explicit failure/retry feedback and no routine reload.
     名前・ホームのセクション並び順は画面から外した（保存値は save_settings が保持する）。
     メニューはグループ単位でなく機能（ページ）単位で切り替える。
     """
@@ -6941,6 +7353,8 @@ def render_settings_html():
     cur_style = settings.get("style", dashboard_settings.DEFAULT_STYLE)
     accent_on = bool(settings["accent"])
     accent_val = settings["accent"] or P["accent"]
+    gradient_secondary = settings.get("gradient_secondary", dashboard_settings.DEFAULT_GRADIENT_SECONDARY)
+    gradient_mode = dashboard_settings.appearance_mode(settings)
     sfx_on = bool(settings.get("sfx_enabled", True))
     bgm_on = bool(settings.get("bgm_enabled", True))
     model_effort = settings.get("model_effort", dashboard_settings.model_effort_defaults())
@@ -6965,6 +7379,19 @@ def render_settings_html():
         return (f'<details class="set-more"><summary>{chev()} {L("Details", "詳細")}</summary>'
                 f'<p class="hint">{text}</p></details>')
 
+    def color_adjust(target, label):
+        rows = ""
+        for axis, en, ja, maximum, unit in (
+                ('h', 'Hue', '色相', 360, '°'),
+                ('s', 'Saturation', '彩度', 100, '%'),
+                ('l', 'Lightness', '明度', 100, '%')):
+            key = f'{target}-{axis}'
+            rows += (f'<div class="color-axis"><label for="{key}">{L(en, ja)}</label>'
+                     f'<input type="range" id="{key}" data-color-axis="{axis}" min="0" max="{maximum}" step="0.1">'
+                     f'<output for="{key}" data-color-value="{axis}" data-unit="{unit}"></output></div>')
+        return (f'<fieldset class="color-adjust" data-color-target="{target}">'
+                f'<legend>{label}</legend>{rows}<output class="color-hex" for="{target}"></output></fieldset>')
+
     default_tag = f'<span class="tag">{L("Default", "既定")}</span>'
     styleguide_link = (f'<a href="/styleguide">{dashboard_icons.ui_icon_svg("monitor", 14)} '
                        f'{L("UI style guide", "UIスタイルガイド")}</a>' if PLUGINS.owns("/styleguide") else "")
@@ -6974,10 +7401,16 @@ def render_settings_html():
         f'{html.escape(label)}{default_tag if key == dashboard_settings.DEFAULT_LANG else ""}</label>'
         for key, label in dashboard_settings.LANGS.items())
 
-    cur_preset = "matrix" if cur_style in dashboard_theme.MATRIX_STYLE_KEYS else cur_theme
+    cur_preset = dashboard_settings.theme_family(cur_theme, cur_style)
     theme_cards = ""
-    more_theme_cards = ""
+    legacy_theme_cards = ""
     for key, (label, theme, style) in dashboard_settings.THEME_PRESETS.items():
+        label = {"soft": L("Soft", "ソフト"), "basic": L("Basic", "ベーシック"),
+                 "soft-light": L("Soft Light", "ソフトライト"),
+                 "soft-dark": L("Soft Dark", "ソフトダーク"),
+                 "gradient": L("Gradient", "グラデーション")}.get(key, label)
+        if key in dashboard_settings.THEME_FAMILIES:
+            theme = dashboard_settings.THEME_FAMILIES[key][gradient_mode]
         if key == "matrix":
             # Keep the stored base palette and high-contrast variant until changed.
             theme = cur_theme
@@ -6987,13 +7420,14 @@ def render_settings_html():
             if settings["accent"]:
                 pal = dashboard_theme.recolor_matrix(pal, settings["accent"])
         else:
-            pal = dashboard_settings.effective_palette(dict(theme=theme, accent=settings["accent"]))
+            pal = dashboard_settings.effective_palette(dict(theme=theme, accent=settings["accent"],
+                gradient_secondary=gradient_secondary, gradient_mode=gradient_mode))
         checked = " checked" if key == cur_preset else ""
         dots = "".join(f'<span class="swatch" style="background:{pal[k]}"></span>'
                        for k in ("bg", "card", "accent", "fg"))
-        tag = default_tag if key == dashboard_settings.DEFAULT_THEME else ""
+        tag = default_tag if key == dashboard_settings.theme_family(dashboard_settings.DEFAULT_THEME) else ""
         card = (
-            f'<label class="theme-card"><input type="radio" name="theme-preset" value="{key}"'
+            f'<label class="theme-card"{" hidden" if key not in dashboard_settings.PRIMARY_THEME_PRESETS and key != cur_preset else ""}><input type="radio" name="theme-preset" value="{key}"'
             f' data-theme="{theme}" data-style="{style}"{checked}>'
             f'<span class="tc-body"><span class="tc-swatches" aria-hidden="true">{dots}</span>'
             f'<span class="tc-name">{html.escape(label)}</span>{tag}</span></label>'
@@ -7001,8 +7435,7 @@ def render_settings_html():
         if key in dashboard_settings.PRIMARY_THEME_PRESETS:
             theme_cards += card
         else:
-            more_theme_cards += card
-    more_open = " open" if cur_preset not in dashboard_settings.PRIMARY_THEME_PRESETS else ""
+            legacy_theme_cards += card
 
     menu_groups = ""
     for gkey, glabel, items in dashboard_ui.nav_feature_groups():
@@ -7051,6 +7484,13 @@ def render_settings_html():
 {dashboard_ui.page_header("settings", dashboard_icons.nav_icon_svg("settings", 19) + " 設定")}
 
 <main class="settings-page">
+<div class="settings-intro">
+  <p>{L("Make SHUKI feel like yours.", "SHUKIを、自分に合う使い心地に。")}</p>
+  <div class="autosave-status" id="autosave-status" data-state="saved">
+    <span id="msg" role="status" aria-live="polite">{L("All changes saved", "すべて保存済み")}</span>
+    <button type="button" class="pill" id="settings-retry" hidden>{L("Retry", "再試行")}</button>
+  </div>
+</div>
 <section class="card set-card setup-choice" id="setup-settings">
   <div class="set-row">
     <div class="set-text"><span class="set-label">{L("Your setup", "表示の設定")}</span>
@@ -7068,12 +7508,30 @@ def render_settings_html():
   <h2 class="set-h">{L("Appearance", "見た目")}</h2>
   <div class="set-row set-row-head"><div class="set-text"><span class="set-label">{L("Theme", "配色テーマ")}</span></div></div>
   <div class="set-sub">
+    <p class="hint" id="theme-preview-status" role="status" aria-live="polite">{L("Changes appear here and save automatically.", "変更はこの画面に反映され、自動で保存されます。")}</p>
     <div class="themes" role="radiogroup" aria-label="{L("Main themes", "主なテーマ")}">{theme_cards}</div>
-    <details class="theme-more" id="more-themes"{more_open}>
-      <summary>{chev()} {L("More themes", "その他のテーマ")}</summary>
-      <div class="themes" role="radiogroup" aria-label="{L("More themes", "その他のテーマ")}">{more_theme_cards}</div>
+    <div class="set-row" id="appearance-mode-settings">
+      <div class="set-text"><span class="set-label">{L("Appearance mode", "明るさ")}</span></div>
+      <div class="set-ctl"><div class="seg" role="radiogroup" aria-label="{L("Appearance mode", "明るさ")}">
+        <label><input type="radio" name="gradient-mode" value="light"{" checked" if gradient_mode == "light" else ""}>{L("Light", "ライト")}</label>
+        <label><input type="radio" name="gradient-mode" value="dark"{" checked" if gradient_mode == "dark" else ""}>{L("Dark", "ダーク")}</label>
+      </div></div>
+    </div>
+    <div id="legacy-themes"{" hidden" if cur_preset in dashboard_settings.PRIMARY_THEME_PRESETS else ""}>
+      <p class="hint">{L("Existing theme · save it as a favorite to reuse this look.", "以前のテーマ・お気に入りに登録すると、この見た目を再利用できます。")}</p>
+      <div class="themes" role="radiogroup" aria-label="{L("Existing theme", "以前のテーマ")}">{legacy_theme_cards}</div>
+    </div>
+    <details class="theme-more" id="theme-favorites">
+      <summary>{chev()} {L("Favorites", "お気に入り")} <span id="favorite-count"></span></summary>
+      <p class="hint">{L("Keep the current theme and colors. Favorites save automatically.", "現在のテーマと色を登録します。お気に入りも自動で保存されます。")}</p>
+      <div class="favorite-tools">
+        <input id="favorite-name" type="text" maxlength="60" autocomplete="off" placeholder="{L("Name (optional)", "名前（任意）")}" aria-label="{L("Favorite name", "お気に入りの名前")}">
+        <button type="button" class="pill" id="favorite-add">{L("Add current to favorites", "今の設定をお気に入りに登録")}</button>
+      </div>
+      <div class="favorite-list" id="favorite-list"></div>
+      <p class="hint" id="favorite-status" role="status" aria-live="polite"></p>
     </details>
-    <p class="hint" id="colorblind-hint"{"" if cur_preset == "colorblind" else " hidden"}>Blue success · Orange danger. Categories use names. Collection badges keep their colors.</p>
+    <p class="hint" id="colorblind-hint"{"" if cur_preset == "colorblind" else " hidden"}>{L("Blue success · Orange danger · Underlined links. Read status labels and category names; collection badges keep their colors.", "青＝成功・オレンジ＝危険・リンクには下線。状態とカテゴリは文字でも確認できます。コレクションバッジの色は維持します。")}</p>
   </div>
   <label class="set-row" for="accent-on">
     <div class="set-text"><span class="set-label">{L("Custom accent color", "アクセント色を上書き")}</span>
@@ -7082,6 +7540,17 @@ def render_settings_html():
     <span class="set-ctl"><input type="color" id="accent" value="{accent_val}" aria-label="{L("Accent color", "アクセント色")}">
       {switch('id="accent-on"', accent_on, L("Custom accent color", "アクセント色を上書き"))}</span>
   </label>
+  <p class="hint" id="tinted-theme-hint"{"" if cur_preset in dashboard_settings.COLOR_THEMES else " hidden"}>{L("Your accent also tints the background. Button and link shades adapt for readable contrast.", "アクセント色で背景も色づきます。ボタンとリンクの明るさは読みやすく調整されます。")}</p>
+  {color_adjust('accent', L('Adjust the current accent color', '現在のアクセント色から調整'))}
+  <div id="gradient-settings"{"" if cur_preset == "gradient" else " hidden"}>
+    <div class="set-row">
+      <div class="set-text"><label class="set-label" for="gradient-secondary">{L("Second gradient color", "グラデーションの2色目")}</label>
+        <small>{L("Blends with your accent in the background; cards stay opaque.", "アクセント色と背景で混ざります。カードは不透明のまま表示します。")}</small></div>
+      <div class="set-ctl"><input type="color" id="gradient-secondary" value="{gradient_secondary}">
+        <button type="button" class="pill" id="gradient-default">{L("Use default", "既定色に戻す")}</button></div>
+    </div>
+    {color_adjust('gradient-secondary', L('Adjust the current second color', '現在の2色目から調整'))}
+  </div>
 </section>
 
 <section class="card set-card" id="menu-settings">
@@ -7137,12 +7606,6 @@ def render_settings_html():
 {shuki_webpush.settings_html()}
 {mcp_health.settings_html()}
 
-<div class="save-bar" id="save-bar" hidden>
-  <span class="sb-text">{L("Unsaved changes", "未保存の変更があります")}</span>
-  <span id="msg" role="status" aria-live="polite"></span>
-  <button type="button" class="pill" onclick="location.reload()">{L("Discard", "破棄")}</button>
-  <button type="button" class="save" onclick="save()">{L("Save", "保存")}</button>
-</div>
 <div class="page-foot">
   <button type="button" class="reset" onclick="resetAll()">{L("Reset all settings to defaults", "すべて初期設定に戻す")}</button>
   {styleguide_link}
@@ -7151,33 +7614,209 @@ def render_settings_html():
 <script>
   const standard = {json.dumps(standard, ensure_ascii=False)};
   let customDraft = null;
+  let gradientDraft = {json.dumps(settings.get('gradient_mode', 'light'))};
   let navDraft = {json.dumps(nav)};
   const settingsById = id => document.getElementById(id);
+  const themeFamilies = {json.dumps(dashboard_settings.THEME_FAMILIES)};
+  function familyKey(p) {{
+    if (p.style !== 'standard') return 'matrix';
+    return Object.keys(themeFamilies).find(key => Object.values(themeFamilies[key]).includes(p.theme)) || p.theme;
+  }}
+  function modeFor(p) {{
+    return p.theme === 'gradient' ? p.gradient_mode :
+      (['light', 'soft-light', 'colorblind', 'milky'].includes(p.theme) ? 'light' : 'dark');
+  }}
+  function syncFamily() {{
+    const mode = document.querySelector('[name=gradient-mode]:checked').value;
+    document.querySelectorAll('[name=theme-preset]').forEach(el => {{
+      if (themeFamilies[el.value]) el.dataset.theme = themeFamilies[el.value][mode];
+    }});
+  }}
+  let previewSequence = 0, previewTimer, previewController, previewKey;
+  const previewHint = settingsById('theme-preview-status').textContent;
+  function previewAppearance() {{
+    const p = collect();
+    const params = new URLSearchParams({{preview:'1'}});
+    ['theme', 'style', 'accent', 'gradient_secondary', 'gradient_mode'].forEach(key => params.set(key, p[key]));
+    if (params.toString() === previewKey) return;
+    previewKey = params.toString();
+    const sequence = ++previewSequence;
+    clearTimeout(previewTimer);
+    if (previewController) previewController.abort();
+    previewTimer = setTimeout(async () => {{
+      previewController = new AbortController();
+      try {{
+        const response = await fetch('/theme.css?' + params, {{cache:'no-store', signal:previewController.signal}});
+        if (!response.ok) throw new Error('Preview unavailable');
+        const css = await response.text();
+        if (sequence !== previewSequence) return;
+        if (!css.startsWith(':root {{')) throw new Error('Invalid preview');
+        let style = settingsById('theme-live-preview');
+        if (!style) {{ style = document.createElement('style'); style.id = 'theme-live-preview'; document.head.append(style); }}
+        style.textContent = css;
+        document.querySelectorAll('link[rel=stylesheet]').forEach(link => {{
+          if (new URL(link.href).pathname === '/theme.css') link.disabled = true;
+        }});
+        const tokens = getComputedStyle(document.documentElement);
+        document.querySelector('[name=theme-preset]:checked').closest('label').querySelectorAll('.swatch')
+          .forEach((swatch, index) => swatch.style.background = tokens.getPropertyValue('--' + ['bg', 'card', 'accent', 'fg'][index]));
+        settingsById('theme-preview-status').textContent = previewHint;
+      }} catch (error) {{
+        if (error.name !== 'AbortError' && sequence === previewSequence) {{
+          previewKey = null;
+          settingsById('theme-preview-status').textContent = {json.dumps(L('Preview unavailable. Check the save status above.', 'プレビューを表示できません。上部の保存状態を確認してください。'), ensure_ascii=False)};
+        }}
+      }}
+    }}, 40);
+  }}
+  let themeFavorites = {json.dumps(settings.get('theme_favorites', []), ensure_ascii=True).replace('<', chr(92) + 'u003c')};
+  const favoriteFields = ['theme', 'style', 'accent', 'gradient_secondary', 'gradient_mode'];
+  function appearanceKey(p) {{ return JSON.stringify(favoriteFields.map(key => p[key])); }}
+  function renderFavorites() {{
+    const list = settingsById('favorite-list');
+    list.replaceChildren();
+    settingsById('favorite-count').textContent = '(' + themeFavorites.length + ')';
+    themeFavorites.forEach((favorite, index) => {{
+      const row = document.createElement('div'); row.className = 'favorite-entry';
+      const use = document.createElement('button'); use.type = 'button'; use.className = 'pill favorite-use';
+      const title = document.createElement('span'); title.textContent = favorite.name;
+      const detail = document.createElement('small');
+      const key = familyKey(favorite);
+      const preset = document.querySelector('[name=theme-preset][value="' + key + '"]');
+      detail.textContent = preset.closest('label').querySelector('.tc-name').textContent + ' · ' +
+        (favorite.accent || {json.dumps(L('Theme color', 'テーマの色'), ensure_ascii=False)}) +
+        (favorite.theme === 'gradient' ? ' / ' + favorite.gradient_secondary : '') +
+        (themeFamilies[key] ? ' · ' + modeFor(favorite) : '');
+      use.append(title, detail);
+      use.addEventListener('click', () => {{
+        const target = document.querySelector('[name=theme-preset][value="' + key + '"]');
+        target.dataset.theme = favorite.theme; target.dataset.style = favorite.style; target.checked = true;
+        settingsById('accent-on').checked = !!favorite.accent;
+        if (favorite.accent) settingsById('accent').value = favorite.accent;
+        settingsById('gradient-secondary').value = favorite.gradient_secondary;
+        gradientDraft = favorite.gradient_mode;
+        document.querySelectorAll('[name=gradient-mode]').forEach(el => el.checked = el.value === modeFor(favorite));
+        syncFamily();
+        settingsById('colorblind-hint').hidden = key !== 'colorblind';
+        syncColorEditors(); markDirty(); target.focus();
+      }});
+      const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'pill';
+      remove.textContent = {json.dumps(L('Remove', '削除'), ensure_ascii=False)};
+      remove.setAttribute('aria-label', remove.textContent + ' ' + favorite.name);
+      remove.addEventListener('click', () => {{
+        themeFavorites.splice(index, 1); renderFavorites(); markDirty();
+        (settingsById('favorite-list').querySelectorAll('.favorite-entry button')[index * 2] || settingsById('favorite-add')).focus();
+      }});
+      row.append(use, remove); list.append(row);
+    }});
+  }}
+  settingsById('favorite-add').addEventListener('click', () => {{
+    const current = collect();
+    const status = settingsById('favorite-status');
+    if (themeFavorites.some(favorite => appearanceKey(favorite) === appearanceKey(current))) {{
+      status.textContent = {json.dumps(L('This combination is already in favorites.', 'この組み合わせは登録済みです。'), ensure_ascii=False)}; return;
+    }}
+    if (themeFavorites.length >= {dashboard_settings.MAX_THEME_FAVORITES}) {{
+      status.textContent = {json.dumps(L('Favorites are full. Remove one to add another.', 'お気に入りがいっぱいです。削除してから登録してください。'), ensure_ascii=False)}; return;
+    }}
+    const preset = document.querySelector('[name=theme-preset]:checked');
+    const name = settingsById('favorite-name').value.trim() || preset.closest('label').querySelector('.tc-name').textContent;
+    themeFavorites.push({{...Object.fromEntries(favoriteFields.map(key => [key, current[key]])), name}});
+    settingsById('favorite-name').value = '';
+    renderFavorites(); markDirty();
+    status.textContent = {json.dumps(L('Added to favorites.', 'お気に入りに登録しました。'), ensure_ascii=False)};
+  }});
+  const presetAccents = {json.dumps({key: (dashboard_theme.MATRIX_PALETTE['accent'] if key == 'matrix' else dashboard_settings.effective_palette(dict(theme=theme))['accent']) for key, (_, theme, _) in dashboard_settings.THEME_PRESETS.items()})};
+  const themeAccents = {json.dumps({key: pal['accent'] for key, (_, pal) in dashboard_settings.THEMES.items()})};
+  // Keep full-precision HSL state: adjusting one axis must not reset the other two.
+  const colorEditors = [...document.querySelectorAll('[data-color-target]')].map(box => {{
+    const picker = settingsById(box.dataset.colorTarget);
+    let hsl;
+    function draw() {{
+      box.querySelectorAll('[data-color-axis]').forEach(input => {{
+        const axis = input.dataset.colorAxis;
+        input.value = hsl[axis].toFixed(1);
+        const output = box.querySelector('[data-color-value=' + axis + ']');
+        output.value = input.value + output.dataset.unit;
+      }});
+      box.querySelector('.color-hex').value = picker.value;
+    }}
+    function sync() {{
+      const rgb = picker.value.match(/[a-f\\d]{{2}}/gi).map(v => parseInt(v, 16) / 255);
+      const [r,g,b] = rgb, high = Math.max(...rgb), low = Math.min(...rgb), d = high - low;
+      const l = (high + low) / 2;
+      let h = 0;
+      if (d) h = (high === r ? ((g-b)/d + (g < b ? 6 : 0)) : high === g ? (b-r)/d + 2 : (r-g)/d + 4) * 60;
+      hsl = {{h, s: d ? d / (1 - Math.abs(2*l - 1)) * 100 : 0, l:l*100}};
+      draw();
+    }}
+    picker.addEventListener('input', sync);
+    picker.addEventListener('change', sync);
+    box.querySelectorAll('[data-color-axis]').forEach(input => input.addEventListener('input', () => {{
+      hsl[input.dataset.colorAxis] = Number(input.value);
+      const h = (hsl.h % 360) / 60, s = hsl.s / 100, l = hsl.l / 100;
+      const c = (1 - Math.abs(2*l - 1))*s, x = c*(1 - Math.abs(h%2 - 1)), m = l - c/2;
+      const rgb = [[c,x,0],[x,c,0],[0,c,x],[0,x,c],[x,0,c],[c,0,x]][Math.floor(h)];
+      picker.value = '#' + rgb.map(v => Math.round((v+m)*255).toString(16).padStart(2,'0')).join('');
+      if (picker.id === 'accent') settingsById('accent-on').checked = true;
+      draw();
+    }}));
+    sync();
+    return {{sync}};
+  }});
+  function syncColorEditors() {{
+    if (!settingsById('accent-on').checked) {{
+      const preset = document.querySelector('[name=theme-preset]:checked');
+      if (preset) settingsById('accent').value = preset.value === 'matrix' ? presetAccents.matrix : themeAccents[preset.dataset.theme];
+    }}
+    colorEditors.forEach(editor => editor.sync());
+  }}
   function updateMenuCounts() {{
     document.querySelectorAll('.menu-group').forEach(g => {{
       const all = g.querySelectorAll('[data-nav]'), on = g.querySelectorAll('[data-nav]:checked');
       g.querySelector('.mg-count').textContent = on.length + ' / ' + all.length;
+      const quick = document.querySelector('[data-quick-group="' + g.dataset.group + '"]');
+      if (quick) {{ quick.checked = on.length > 0; quick.indeterminate = on.length > 0 && on.length < all.length; }}
     }});
   }}
   function applyPresentation(p) {{
+    gradientDraft = p.gradient_mode;
     navDraft = {{...p.nav}};
     const presets = [...document.querySelectorAll('[name=theme-preset]')];
-    const match = presets.find(el => el.dataset.theme === p.theme && el.dataset.style === p.style);
+    const match = presets.find(el => el.value === familyKey(p));
+    if (match) {{ match.dataset.theme = p.theme; match.dataset.style = p.style; }}
     presets.forEach(el => el.checked = el === match);
     settingsById('colorblind-hint').hidden = !match || match.value !== 'colorblind';
     settingsById('accent-on').checked = !!p.accent;
     if (p.accent) settingsById('accent').value = p.accent;
+    settingsById('gradient-secondary').value = p.gradient_secondary;
+    document.querySelectorAll('[name=gradient-mode]').forEach(el => el.checked = el.value === modeFor(p));
+    syncFamily(); syncColorEditors();
     document.querySelectorAll('[data-nav]').forEach(el =>
       el.checked = p.nav[el.dataset.nav] !== false && p.nav[el.dataset.group] !== false);
     syncLabels();
   }}
   function syncLabels() {{
+    const theme = document.querySelector('[name=theme-preset]:checked');
+    const legacy = settingsById('legacy-themes');
+    legacy.hidden = !theme || {json.dumps(dashboard_settings.PRIMARY_THEME_PRESETS)}.includes(theme.value);
+    legacy.querySelectorAll('.theme-card').forEach(card => card.hidden = !card.querySelector('input').checked);
+    settingsById('gradient-settings').hidden = !theme || theme.value !== 'gradient';
+    settingsById('appearance-mode-settings').hidden = !theme || !themeFamilies[theme.value];
+    settingsById('tinted-theme-hint').hidden = !theme || !{json.dumps(dashboard_settings.COLOR_THEMES)}.includes(theme.dataset.theme);
     const desc = settingsById('accent-desc');
     desc.textContent = settingsById('accent-on').checked ? desc.dataset.on : desc.dataset.off;
     const setup = settingsById('setup-desc');
     setup.textContent = document.querySelector('[name=presentation-mode]:checked').value === 'custom'
       ? setup.dataset.custom : setup.dataset.standard;
     updateMenuCounts();
+    const quickTheme = settingsById('quick-theme');
+    if (quickTheme && theme) {{
+      if (![...quickTheme.options].some(option => option.value === theme.value)) {{
+        quickTheme.add(new Option(theme.closest('label').querySelector('.tc-name').textContent, theme.value));
+      }}
+      quickTheme.value = theme.value;
+    }}
   }}
   document.querySelectorAll('[name=presentation-mode]').forEach(el => el.addEventListener('change', () => {{
     const custom = el.value === 'custom';
@@ -7188,9 +7827,15 @@ def render_settings_html():
   }}));
   settingsById('theme-settings').addEventListener('change', e => {{
     if (e.target.name === 'theme-preset') settingsById('colorblind-hint').hidden = e.target.value !== 'colorblind';
+    if (e.target.name === 'gradient-mode') syncFamily();
+    if (e.target.name === 'theme-preset' || e.target.name === 'gradient-mode' || e.target.id === 'accent-on') syncColorEditors();
   }});
   // 色を選んだらアクセントの上書きをオンにする（色だけ変えて保存しても効かない、を防ぐ）
   settingsById('accent').addEventListener('input', () => {{ settingsById('accent-on').checked = true; syncLabels(); }});
+  settingsById('gradient-default').addEventListener('click', () => {{
+    settingsById('gradient-secondary').value = '{dashboard_settings.DEFAULT_GRADIENT_SECONDARY}';
+    settingsById('gradient-secondary').dispatchEvent(new Event('input', {{bubbles:true}}));
+  }});
   function collect() {{
     const nav = {{...navDraft}};
     const groups = {{}};
@@ -7207,6 +7852,9 @@ def render_settings_html():
       style: preset.dataset.style,
       decor: "off",
       accent: settingsById('accent-on').checked ? settingsById('accent').value : "",
+      gradient_secondary: settingsById('gradient-secondary').value,
+      gradient_mode: preset.value === 'gradient' ? document.querySelector('[name=gradient-mode]:checked').value : gradientDraft,
+      theme_favorites: themeFavorites,
       mascot_enabled: settingsById('mascot-enabled').checked,
       mascot_color: settingsById('mascot-color').value,
       nav: nav,
@@ -7216,28 +7864,140 @@ def render_settings_html():
         .map(el => [el.dataset.effortModel, el.value])),
     }};
   }}
-  const initial = JSON.stringify(collect());
-  function markDirty() {{
-    syncLabels();
-    settingsById('save-bar').hidden = JSON.stringify(collect()) === initial;
+  renderFavorites();
+  let savedSnapshot = JSON.stringify(collect());
+  let saveTimer, saving = false, saveFailed = false, resetting = false;
+  const loadedLanguage = collect().lang;
+  function saveStatus(state, message) {{
+    settingsById('autosave-status').dataset.state = state;
+    settingsById('msg').textContent = message;
+    settingsById('settings-retry').hidden = state !== 'error';
+    document.querySelector('.page-foot .reset').disabled = state === 'saving';
   }}
-  // 通知・MCP・チュートリアル欄はその場で保存する独立パネルなので、保存バーの対象外
+  function hasChanges() {{ return JSON.stringify(collect()) !== savedSnapshot; }}
+  function markDirty(event) {{
+    if (event && (event.target.dataset.quickGroup || event.target.id === 'quick-theme')) return;
+    syncLabels();
+    previewAppearance();
+    clearTimeout(saveTimer);
+    if (resetting || saveFailed) return;
+    if (hasChanges()) {{
+      saveStatus('saving', {json.dumps(L('Saving…', '保存中…'), ensure_ascii=False)});
+      saveTimer = setTimeout(flushSettings, 300);
+    }} else if (!saving) saveStatus('saved', {json.dumps(L('All changes saved', 'すべて保存済み'), ensure_ascii=False)});
+  }}
+  // Independent connection/tutorial panels retain their own explicit actions.
   ['setup-settings', 'custom-settings', 'general-settings', 'mascot-settings', 'effort-settings'].forEach(id => {{
     settingsById(id).addEventListener('change', markDirty);
     settingsById(id).addEventListener('input', markDirty);
   }});
-  function post(payload, onok) {{
-    const msg = settingsById('msg');
-    msg.textContent = {json.dumps(L("Saving…", "保存中…"), ensure_ascii=False)};
-    fetch('/settings', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify(payload)}})
-      .then(r => r.json()).then(d => {{ if (d.ok) onok(); else msg.textContent = {json.dumps(L("Could not save", "保存に失敗しました"), ensure_ascii=False)}; }})
-      .catch(() => {{ msg.textContent = {json.dumps(L("Could not save (server not responding)", "保存に失敗（サーバー未応答）"), ensure_ascii=False)}; }});
+  async function post(payload) {{
+    const response = await fetch('/settings', {{method:'POST', headers:{{'Content-Type':'application/json'}},
+      body:JSON.stringify(payload), keepalive:true}});
+    if (!response.ok) throw new Error('Save failed');
+    const data = await response.json();
+    if (!data.ok || !data.settings) throw new Error('Save failed');
+    return data;
   }}
-  function save() {{ settingsById('save-bar').hidden = false; post(collect(), () => location.reload()); }}
-  function resetAll() {{
+  async function flushSettings() {{
+    clearTimeout(saveTimer);
+    if (saving || saveFailed || resetting || !hasChanges()) return;
+    saving = true;
+    const snapshot = JSON.stringify(collect()), values = JSON.parse(snapshot), before = JSON.parse(savedSnapshot);
+    const patch = Object.fromEntries(Object.entries(values).filter(([key, value]) => JSON.stringify(value) !== JSON.stringify(before[key])));
+    if (patch.model_effort) patch.model_effort = Object.fromEntries(Object.entries(values.model_effort)
+      .filter(([key, value]) => value !== before.model_effort[key]));
+    saveStatus('saving', {json.dumps(L('Saving…', '保存中…'), ensure_ascii=False)});
+    try {{
+      await post(patch);
+      savedSnapshot = snapshot;
+      saveStatus('saved', {json.dumps(L('All changes saved', 'すべて保存済み'), ensure_ascii=False)});
+    }} catch (error) {{
+      saveFailed = true;
+      saveStatus('error', {json.dumps(L('Could not save. Your changes are still here. Retry to keep them.', '保存できませんでした。変更はこの画面に残っています。再試行してください。'), ensure_ascii=False)});
+    }} finally {{ saving = false; }}
+    if (saveFailed) return;
+    if (hasChanges()) await flushSettings();
+    else if (!resetting && values.lang !== loadedLanguage) location.reload();
+  }}
+  settingsById('settings-retry').addEventListener('click', () => {{
+    saveFailed = false;
+    if (hasChanges()) flushSettings();
+    else saveStatus('saved', {json.dumps(L('All changes saved', 'すべて保存済み'), ensure_ascii=False)});
+  }});
+  window.addEventListener('beforeunload', event => {{
+    if (!hasChanges() && !saving) return;
+    if (!saving && !saveFailed) flushSettings();
+    event.preventDefault(); event.returnValue = '';
+  }});
+  document.addEventListener('visibilitychange', () => {{
+    if (document.hidden && !saveFailed) flushSettings();
+  }});
+  async function resetAll() {{
     if (!confirm({json.dumps(L('Reset all settings, including personal preferences, to defaults?', '個人設定も含め、すべて初期設定に戻しますか？'), ensure_ascii=False)})) return;
-    post({{reset:true}}, () => location.reload());
+    if (saving) return;
+    resetting = true; clearTimeout(saveTimer);
+    document.querySelector('main').inert = true;
+    try {{ await post({{reset:true}}); savedSnapshot = JSON.stringify(collect()); location.reload(); }}
+    catch (error) {{
+      resetting = false; document.querySelector('main').inert = false;
+      saveStatus('error', {json.dumps(L('Could not reset. Your settings have been kept.', 'リセットできませんでした。設定は保持されています。'), ensure_ascii=False)});
+    }}
   }}
+  // Move existing controls, so quick and expanded views share one source of truth.
+  function compactSection(id, selectors) {{
+    const box = settingsById(id), heading = box.querySelector(':scope > h2');
+    const body = document.createElement('div'); body.className = 'set-panel-body'; body.id = id + '-body';
+    const header = document.createElement('div'); header.className = 'set-panel-head';
+    const toggle = document.createElement('button'); toggle.type = 'button'; toggle.className = 'set-disclosure';
+    toggle.setAttribute('aria-controls', body.id); toggle.setAttribute('aria-expanded', 'false');
+    toggle.innerHTML = '<span></span>' + {json.dumps(chev())};
+    toggle.firstElementChild.textContent = heading.firstChild.textContent;
+    const note = heading.querySelector('.set-h-note');
+    if (note) body.append(note);
+    heading.remove();
+    const quick = document.createElement('div'); quick.className = 'set-quick';
+    selectors.forEach(selector => {{ const node = box.querySelector(selector); if (node) quick.append(node); }});
+    while (box.firstChild) body.append(box.firstChild);
+    body.hidden = true;
+    header.append(toggle); box.append(header, quick, body); box.classList.add('set-compact');
+    toggle.addEventListener('click', () => {{
+      body.hidden = !body.hidden; toggle.setAttribute('aria-expanded', String(!body.hidden));
+    }});
+    return quick;
+  }}
+  const themeQuick = compactSection('theme-settings', ['#appearance-mode-settings']);
+  const quickThemeRow = document.createElement('div'); quickThemeRow.className = 'set-row';
+  const quickThemeLabel = document.createElement('label'); quickThemeLabel.className = 'set-label';
+  quickThemeLabel.htmlFor = 'quick-theme'; quickThemeLabel.textContent = {json.dumps(L('Theme', '配色テーマ'), ensure_ascii=False)};
+  const quickTheme = document.createElement('select'); quickTheme.id = 'quick-theme';
+  document.querySelectorAll('[name=theme-preset]').forEach(preset => {{
+    if ({json.dumps(dashboard_settings.PRIMARY_THEME_PRESETS)}.includes(preset.value) || preset.checked)
+      quickTheme.add(new Option(preset.closest('label').querySelector('.tc-name').textContent, preset.value, false, preset.checked));
+  }});
+  quickTheme.addEventListener('change', () => {{
+    const preset = document.querySelector('[name=theme-preset][value="' + quickTheme.value + '"]');
+    preset.checked = true; preset.dispatchEvent(new Event('change', {{bubbles:true}}));
+  }});
+  quickThemeRow.append(quickThemeLabel, quickTheme); themeQuick.prepend(quickThemeRow);
+  const menuQuick = compactSection('menu-settings', []);
+  document.querySelectorAll('.menu-group').forEach(group => {{
+    const label = document.createElement('label'); label.className = 'quick-menu';
+    const title = document.createElement('span');
+    const name = group.querySelector('.mg-head').cloneNode(true);
+    name.querySelectorAll('svg, .mg-count').forEach(node => node.remove()); title.textContent = name.textContent.trim();
+    const input = document.createElement('input'); input.type = 'checkbox'; input.className = 'sw';
+    input.setAttribute('role', 'switch'); input.dataset.quickGroup = group.dataset.group;
+    label.append(title, input); menuQuick.append(label);
+    input.addEventListener('change', () => {{
+      group.querySelectorAll('[data-nav]').forEach(control => control.checked = input.checked);
+      markDirty();
+    }});
+  }});
+  compactSection('general-settings', ['#language-settings']);
+  compactSection('mascot-settings', ['label[for=mascot-enabled]']);
+  compactSection('tutorial-settings', ['label[for=tut-guides]']);
+  compactSection('effort-settings', ['.effort-row']);
   // 接続パネルは閉じていても状態が分かるよう、本文の状態行を見出しに写す
   [['push-settings', 'push-status'], ['mcp-settings', 'mcp-summary']].forEach(([panel, source]) => {{
     const box = settingsById(panel), src = settingsById(source);
@@ -7298,14 +8058,22 @@ def read_vault_image(rel):
     vault全体を探索するフォールバックを持つ（パス区切りが無い＝トラバーサル不可）。"""
     if not rel:
         return None
-    abspath = (VAULT / rel).resolve()
-    if not (str(abspath).startswith(str(VAULT.resolve())) and abspath.is_file()):
+    root = VAULT.resolve()
+    abspath = (root / rel).resolve()
+    if not (_path_is_under(abspath, root) and abspath.is_file()):
         if "/" in rel or "\\" in rel:
             return None
-        found = next(VAULT.rglob(rel), None)
+        # Bare filenames are literal Obsidian links, never glob patterns.
+        if any(c in rel for c in '*?[]'):
+            return None
+        found = next((p for p in root.rglob(rel)
+                      if _path_is_under(p.resolve(), root)
+                      and not _is_dora_deny(p.relative_to(root).as_posix(), {})), None)
         if found is None or not found.is_file():
             return None
-        abspath = found
+        abspath = found.resolve()
+    if _is_dora_deny(abspath.relative_to(root).as_posix(), {}):
+        return None
     ctype = IMAGE_CTYPES.get(abspath.suffix.lower())
     if ctype is None:
         return None
@@ -7338,7 +8106,7 @@ QUEUE_LOCK = threading.RLock()
 
 
 def _start_monster_hatch():
-    """ホームで「AIに渡す」と保存したメモから日記モンスターを孵す（2026-10-11）。待たずに返す。
+    """Hatch only explicitly requested diary monsters; the worker rechecks consent.
 
     journal_monsters.py は自前のロックで多重起動を避け、失敗分は card_gen 定期便（毎朝7:15）が拾い直す。
     """
@@ -7402,6 +8170,49 @@ def _memo_files(days=MEMO_LIST_DAYS):
 def _memo_entry_key(fname, idx, entry):
     """entry に id が無い旧データ用のフォールバックキー（ファイル名+位置）。"""
     return entry.get("id") or f"{fname}#{idx}"
+
+
+def work_session_source(relative, task=False):
+    """Deny excluded/unindexed sources before opening any body; never retrieve old logs."""
+    import hashlib
+    import dashboard_voice_context
+
+    if not isinstance(relative, str):
+        raise ValueError("Select an existing task or source note")
+    relative = dashboard_file_links.normalise_vault_relative_path(relative)
+    if (task and (not relative.startswith(TASK_PREFIX)
+                  or relative.count("/") != TASK_PREFIX.count("/"))):
+        raise ValueError("Select an existing task")
+    if relative.split("/", 1)[0] not in {"00_Intranet", "02_Home", "03_Projects", "04_Tasks", "05_Areas", "06_Resources"}:
+        raise ValueError("This source is not available for work sessions")
+    target = dashboard_voice_context.allowed_path(VAULT, relative)
+    if target is None:
+        raise ValueError("SHUKI's source-access rules keep this task or note outside work sessions.")
+    VAULT_INDEX.ensure_fresh()
+    rec = VAULT_INDEX.by_path(relative)
+    if rec is None:
+        raise ValueError("This task or note is not in the current index. Refresh Tasks before trying again.")
+    if _is_dora_deny(relative, rec.get("fm") or {}):
+        raise ValueError("SHUKI's privacy rules keep this task or note outside work sessions.")
+    if rec.get("fm", {}).get("status") == "archived":
+        raise ValueError("Archived tasks and notes are not available for work sessions.")
+    if not target.is_file():
+        raise ValueError("This task or note has moved or is missing. Refresh Tasks before trying again.")
+    if target.stat().st_size > 65536:
+        raise ValueError("This source is too large for a work-session plan")
+    fm = rec.get("fm") or {}
+    result = {"path": relative, "title": str(fm.get("title") or target.stem)[:200]}
+    if task:
+        raw = target.read_bytes()
+        fm = vault_index.parse_frontmatter(core_vault.frontmatter(raw.decode("utf-8-sig")))
+        if _is_dora_deny(relative, fm) or fm.get("status") == "archived":
+            raise ValueError("This task is not available for work sessions")
+        due = str(fm.get("due") or "")
+        result.update(title=str(fm.get("title") or target.stem)[:200], status=str(fm.get("status") or ""),
+                      due=due if re.fullmatch(r"\d{4}-\d{2}-\d{2}", due) else "",
+                      completion_criteria=str(fm.get("completion_criteria") or "")[:500],
+                      revision=hashlib.sha256(raw).hexdigest())
+    return result
 
 
 def _calendar_range_bounds(range_key):
@@ -7505,6 +8316,9 @@ def _calendar_suggest_candidates():
     """
     quests = load_board_quests()
     pushed = _load_gcal_pushed()
+    planned = {r.get("path") for r in work_sessions.records().values()
+               if r.get("status") == "confirmed"
+               and str(r.get("start", ""))[:10] >= datetime.now(core_vault.JST).date().isoformat()}
     out = []
     for rec in VAULT_INDEX.notes():
         if not rec["path"].startswith(ai_lane.TASK_PREFIX):
@@ -7518,7 +8332,7 @@ def _calendar_suggest_candidates():
         if r["lane"] != "human":
             continue
         abspath = str(VAULT / rec["path"])
-        if abspath in pushed:
+        if abspath in pushed or rec["path"] in planned:
             continue
         area = fm.get("area") or []
         if isinstance(area, list):
@@ -7578,11 +8392,35 @@ def _calendar_suggest_for_day(candidates, dismissed, target_day, max_n=3):
     return [item for _, item in scored[:max_n]]
 
 
+def _work_links_by_event():
+    linked = {}
+    for item in work_sessions.records().values():
+        path = item.get("path")
+        rec = VAULT_INDEX.by_path(path) if path else None
+        if (item.get("status") == "confirmed" and rec and rec.get("fm", {}).get("status") != "archived"
+                and not _is_dora_deny(path, rec.get("fm") or {})
+                and path.startswith(TASK_PREFIX)):
+            import dashboard_voice_context
+            if dashboard_voice_context.allowed_path(VAULT, path) is not None:
+                linked[item.get("id")] = path
+    return linked
+
+
+def _calendar_study_video(event):
+    """Expose only the public video link of an explicitly marked study event."""
+    description = event.get("description", "")
+    if not isinstance(description, str) or not re.search(r"(?m)^shuki_study: ielts-video-v1\r?$", description):
+        return ""
+    match = re.search(r"(?m)^video: https://www\.youtube\.com/watch\?v=([A-Za-z0-9_-]{11})\r?$", description)
+    return "https://www.youtube.com/watch?v=" + match[1] if match else ""
+
+
 def _calendar_days_payload(range_key):
     """/calendar/data の本体。GCal API を直接呼ぶ（キャッシュなし・開くたび最新＝ユーザーの希望どおり）。"""
     start, end = _calendar_range_bounds(range_key)
     events = calendar_utils.get_events(start, end, max_results=100)
     notes_by_event = list_calendar_notes()
+    work_links = _work_links_by_event()
     today = datetime.now(core_vault.JST).date()
     suggest_candidates = _calendar_suggest_candidates()
     suggest_dismissed = _load_cal_suggest_dismissed()
@@ -7607,7 +8445,9 @@ def _calendar_days_payload(range_key):
             day_events.append({
                 "id": ev.get("id", ""), "summary": ev.get("summary", ""),
                 "location": ev.get("location", ""), "time_label": time_label, "start": start_iso,
+                "study_video_url": _calendar_study_video(ev),
                 "notes": notes_by_event.get(ev.get("id", ""), []),
+                "work_task": work_links.get(ev.get("id", ""), ""),
             })
         # 予定が少ない（0〜1件）当日以降の日だけ、AIがタスクDBから提案を差し込む。
         # 過去日・既に埋まっている日には出さない（「空きに差し込む」という趣旨から外れるため）。
@@ -7648,6 +8488,7 @@ def _calendar_month_payload(anchor_str):
     time_max = datetime(grid_end.year, grid_end.month, grid_end.day, tzinfo=core_vault.JST)
     events = calendar_utils.get_events(time_min, time_max, max_results=250)
     notes_by_event = list_calendar_notes()
+    work_links = _work_links_by_event()
     today = datetime.now(core_vault.JST).date()
     events_by_day = {}
     for ev in events:
@@ -7665,7 +8506,9 @@ def _calendar_month_payload(anchor_str):
         events_by_day.setdefault(day_key, []).append({
             "id": ev.get("id", ""), "summary": ev.get("summary", ""),
             "location": ev.get("location", ""), "time_label": time_label, "start": start_iso,
+            "study_video_url": _calendar_study_video(ev),
             "notes": notes_by_event.get(ev.get("id", ""), []),
+                "work_task": work_links.get(ev.get("id", ""), ""),
         })
     suggest_candidates = _calendar_suggest_candidates()
     suggest_dismissed = _load_cal_suggest_dismissed()
@@ -7914,6 +8757,20 @@ class Handler(BaseHTTPRequestHandler):
         if not PLUGINS.owns(parsed.path) and not shuki_core.route_enabled(parsed.path):
             self._respond(404, b"not found")
             return
+        if parsed.path == '/writing-companion.js':
+            self._respond(200, Path(__file__).with_name('dashboard_writing_companion.js').read_bytes(),
+                          'application/javascript; charset=utf-8', cache_control='no-cache')
+            return
+        if parsed.path == '/writing-companion/models':
+            try:
+                metadata = writing_companion.model_options()
+            except (ValueError, writing_companion.CodexError):
+                self._respond(503, b'{"error":"Magic Diary model settings are unavailable."}',
+                              'application/json; charset=utf-8', cache_control='private, no-store')
+            else:
+                self._respond(200, json.dumps(metadata).encode('utf-8'),
+                              'application/json; charset=utf-8', cache_control='private, no-store')
+            return
         if parsed.path == "/connections/data":
             if not shuki_webpush.guard(self.client_address[0], self.headers.get("Host", ""),
                                        self.headers.get("Origin")):
@@ -7922,9 +8779,13 @@ class Handler(BaseHTTPRequestHandler):
             self._respond(200, json.dumps(mcp_health.service().public()).encode("utf-8"),
                           "application/json; charset=utf-8", cache_control="private, no-store")
             return
-        if parsed.path in ("/sw.js", "/push/client.js"):
-            asset = "sw.js" if parsed.path == "/sw.js" else "webpush.js"
-            self._respond(200, (shuki_webpush.ASSETS / asset).read_bytes(),
+        if parsed.path in ("/sw.js", "/push/client.js", "/offline-memo.js"):
+            if parsed.path == "/offline-memo.js" and not shuki_core.feature_enabled("offline_memos"):
+                self._respond(404, b"not found")
+                return
+            asset = {"/sw.js": "sw.js", "/push/client.js": "webpush.js", "/offline-memo.js": "offline-memo.js"}[parsed.path]
+            body = (shuki_webpush.ASSETS / asset).read_bytes()
+            self._respond(200, body,
                           "application/javascript; charset=utf-8", cache_control="no-cache")
             return
         if parsed.path == "/push/config":
@@ -8120,6 +8981,9 @@ class Handler(BaseHTTPRequestHandler):
                 subprocess.Popen(["powershell.exe", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                                   "-File", str(VOICEVOX_STOP)])
                 self._redirect_home() if "back" in qs else self._respond(204)
+            elif parsed.path == "/work-sessions.js":
+                self._respond(200, work_sessions.JS.encode("utf-8"), "application/javascript; charset=utf-8",
+                              cache_control="no-cache")
             elif parsed.path == "/board":
                 self._respond(200, dashboard_board.render_board_html().encode("utf-8"),
                               "text/html; charset=utf-8")
@@ -8128,7 +8992,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._respond(200, body, "application/json; charset=utf-8")
             elif parsed.path == "/files":
                 requested = qs.get("p", [""])[0]
-                if requested and _vault_markdown_target(requested) is None:
+                if (requested and not re.fullmatch(r'journal:[a-zA-Z0-9-]{12,64}', requested)
+                        and _vault_markdown_target(requested) is None):
                     self._respond(404, b'{"error":"file not found"}',
                                   "application/json; charset=utf-8")
                 else:
@@ -8136,11 +9001,19 @@ class Handler(BaseHTTPRequestHandler):
                                   "text/html; charset=utf-8")
             elif parsed.path == "/files/data":
                 body = json.dumps({"files": collect_files_data()}, ensure_ascii=False).encode("utf-8")
-                self._respond(200, body, "application/json; charset=utf-8")
+                self._respond(200, body, "application/json; charset=utf-8", cache_control='private, no-store')
             elif parsed.path == "/files/search":
                 q = qs.get("q", [""])[0]
                 body = json.dumps({"items": search_vault_files(q)}, ensure_ascii=False).encode("utf-8")
-                self._respond(200, body, "application/json; charset=utf-8")
+                self._respond(200, body, "application/json; charset=utf-8", cache_control="private, no-store")
+            elif parsed.path == "/files/thumbnail":
+                path = qs.get("p", [""])[0]
+                rec = VAULT_INDEX.by_path(path)
+                got = (FILE_THUMBNAILS.diagram(path, rec.get('fm', {}))
+                       if FILE_THUMBNAILS is not None and rec
+                       and not _is_dora_deny(path, rec.get('fm', {})) else None)
+                self._respond(200 if got else 404, json.dumps(got or {}).encode('utf-8'),
+                              'application/json; charset=utf-8', cache_control='private, no-store')
             elif parsed.path == "/files/preview":
                 # read_preview_md() は旧 /review/preview と共有する実装（安全チェック・レンダリング共有）
                 got = read_preview_md(qs.get("p", [""])[0])
@@ -8148,6 +9021,14 @@ class Handler(BaseHTTPRequestHandler):
                     self._respond(404, b'{"error":"not found"}', "application/json; charset=utf-8")
                 else:
                     self._respond(200, got.encode("utf-8"), "text/html; charset=utf-8")
+            elif parsed.path in ('/files/journal-preview', '/files/journal-covers'):
+                key = qs.get('entry', [''])[0]
+                got = (FILE_JOURNALS.preview(key) if parsed.path.endswith('journal-preview')
+                       else FILE_JOURNALS.cover_options(key))
+                body = got if isinstance(got, str) else json.dumps(got or {}, ensure_ascii=False)
+                self._respond(404 if got is None else 200, body.encode('utf-8'),
+                              'text/html; charset=utf-8' if isinstance(got, str) else 'application/json; charset=utf-8',
+                              cache_control='private, no-store')
             elif parsed.path == "/news":
                 self._respond(200, dashboard_news.render_news_html().encode("utf-8"),
                               "text/html; charset=utf-8")
@@ -8163,6 +9044,11 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/decisions":
                 self._respond(200, dashboard_decisions.render_decisions_page_html().encode("utf-8"),
                               "text/html; charset=utf-8")
+            elif parsed.path == "/decisions/preview":
+                got = read_decision_preview(qs.get("p", [""])[0])
+                self._respond(200 if got is not None else 404,
+                              (got if got is not None else 'Preview unavailable').encode('utf-8'),
+                              'text/html; charset=utf-8', cache_control='private, no-store')
             elif parsed.path == "/decisions/data":
                 body = json.dumps({"items": collect_decisions_items()}, ensure_ascii=False).encode("utf-8")
                 self._respond(200, body, "application/json; charset=utf-8")
@@ -8211,7 +9097,7 @@ class Handler(BaseHTTPRequestHandler):
                 if got is None:
                     self._respond(404, b"not found")
                 else:
-                    self._respond(200, got[0], got[1])
+                    self._respond(200, got[0], got[1], cache_control="private, no-store")
             elif parsed.path == "/settings":
                 self._respond(200, render_settings_html().encode("utf-8"), "text/html; charset=utf-8")
             elif parsed.path == "/manifest.json":
@@ -8242,7 +9128,9 @@ class Handler(BaseHTTPRequestHandler):
                     self._respond(404, b"not found")
             elif parsed.path == "/theme.css":
                 # デザイントークン単一情報源（🖥 UIデザイン原則 §1・§7）。全ページがこれを <link> する。
-                self._respond(200, dashboard_theme.theme_css().encode("utf-8"), "text/css; charset=utf-8")
+                preview_query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+                self._respond(200, dashboard_theme.theme_css(dashboard_theme.settings_from_query(preview_query)).encode("utf-8"),
+                              "text/css; charset=utf-8", cache_control="private, no-store" if "preview" in preview_query else None)
             elif parsed.path == "/profile.js":
                 # 個人の Area 定義（名前・順・色・アイコン）を画面へ渡す層（2026-09-27）。
                 # 静的Webapp の app.js は Python を import できないので、以前は Area 定義を
@@ -8444,6 +9332,38 @@ class Handler(BaseHTTPRequestHandler):
         if not shuki_core.route_enabled(path):
             self._respond(404, b"not found")
             return
+        if path == '/writing-companion':
+            try:
+                result = WRITING_COMPANION.handle(json.loads(self._read_body(QUEUE_MAX_BYTES)))
+                code = 200
+            except writing_companion.CompanionError as error:
+                code, result = error.status, {'error': str(error)}
+                if error.code:
+                    result['code'] = error.code
+            except (ValueError, TypeError, UnicodeError):
+                code, result = 400, {'error': 'Invalid live diary request.'}
+            self._respond(code, json.dumps(result, ensure_ascii=False).encode('utf-8'),
+                          'application/json; charset=utf-8', cache_control='private, no-store')
+            return
+        if path == '/files/journal-cover':
+            try:
+                payload = json.loads(self._read_body(16384))
+                if not isinstance(payload, dict):
+                    raise ValueError('Expected a thumbnail choice')
+                with QUEUE_LOCK:
+                    FILE_JOURNALS.set_cover(payload.get('entry'), payload.get('choice'))
+                    record = next((row for row in FILE_JOURNALS.records()
+                                   if row['entry_id'] == payload['entry']), None)
+            except LookupError:
+                self._json_err(404, 'Entry not found')
+            except (ValueError, TypeError):
+                self._json_err(400, 'Invalid thumbnail choice')
+            except (OSError, library_journal.sqlite3.Error):
+                self._json_err(503, 'Could not save thumbnail preferences')
+            else:
+                self._respond(200, json.dumps({'ok': True, 'record': record}, ensure_ascii=False).encode('utf-8'),
+                              'application/json; charset=utf-8', cache_control='private, no-store')
+            return
         if path == "/connections/update":
             if not shuki_webpush.guard(self.client_address[0], self.headers.get("Host", ""),
                                       self.headers.get("Origin"), self.headers.get("X-SHUKI-Push"), mutation=True):
@@ -8501,6 +9421,17 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._respond(200, json.dumps(result).encode("utf-8"),
                               "application/json; charset=utf-8", cache_control="no-store")
+            return
+        if path == "/work-sessions":
+            raw = self._read_body(QUEUE_MAX_BYTES)
+            try:
+                payload = json.loads(raw) if raw else None
+            except (ValueError, TypeError):
+                self._json_err(400, "Invalid work-session request")
+                return
+            code, result = work_sessions.handle(payload, work_session_source, REVIEW_INBOX)
+            self._respond(code, json.dumps(result, ensure_ascii=False).encode("utf-8"),
+                          "application/json; charset=utf-8", cache_control="private, no-store")
             return
         if path == "/chat/action":
             # 対話パネルのアクションカード（予定登録・タスク起票）。AI は提案を書くだけで、
@@ -8666,13 +9597,59 @@ class Handler(BaseHTTPRequestHandler):
                             or len(home_text) > HOME_MEMO_MAX_CHARS or processing not in ("ai", "record")):
                         self._json_err(400, "bad home memo")
                         return
+                    if processing == 'ai' and (payload.get('private') or payload.get('storage') == 'private'):
+                        self._json_err(400, 'Private saves cannot request AI processing')
+                        return
+                    client_id = payload.get('client_id')
+                    captured_at = payload.get('captured_at')
+                    if client_id is not None and not shuki_core.feature_enabled('offline_memos'):
+                        self._json_err(404, 'Offline memo delivery is not installed')
+                        return
+                    if client_id is not None:
+                        try:
+                            valid_capture = (isinstance(captured_at, str) and len(captured_at) <= 40
+                                and datetime.fromisoformat(captured_at.replace('Z', '+00:00')).utcoffset() is not None)
+                        except ValueError:
+                            valid_capture = False
+                        if (not isinstance(client_id, str) or not re.fullmatch(r'[0-9a-f]{32}', client_id)
+                                or not valid_capture):
+                            self._json_err(400, 'Invalid offline memo identifier or capture time')
+                            return
                     entry = {"text": home_text, "source": "home", "processing": processing, "status": "open"}
+                    try:
+                        entry['ai_action'] = writing_intent.validate_action(processing, payload.get('ai_action'))
+                    except ValueError:
+                        self._json_err(400, 'Invalid writing action')
+                        return
+                    if ((entry['ai_action'] == 'companion' and not shuki_core.feature_enabled('journal'))
+                            or (entry['ai_action'] == 'monster' and not shuki_core.feature_enabled('game'))):
+                        self._json_err(404, 'This writing feature is not installed or is disabled')
+                        return
+                    entry['ts'] = datetime.now(core_vault.JST).isoformat()
+                    if payload.get('processing') == 'ai':
+                        entry['ai_consent'] = writing_intent.EXPLICIT_CONSENT
                     if processing == "record":  # 記録だけは最初から処理済み＝AI回収便の対象外（journal と同じ扱い）
                         entry.update(status="done", outcome="record", outcome_detail="記録として保存（AI処理なし）")
-                    rel = queue_append("memo", entry)
-                    if processing == "ai":
+                    if writing_intent.companion_requested(entry):
+                        entry.update(status='done', outcome='companion', outcome_detail='Magic diary saved')
+                    if writing_intent.monster_requested(entry):
+                        entry.update(status='done', outcome='monster', outcome_detail='Diary monster requested')
+                    duplicate = False
+                    if client_id is not None:
+                        try:
+                            rel, duplicate = home_outbox.append(entry, client_id, captured_at,
+                                queue=UI_QUEUE, vault=VAULT, lock=QUEUE_LOCK, write=_queue_append_locked)
+                        except ValueError as error:
+                            self._json_err(409, str(error))
+                            return
+                    else:
+                        rel = queue_append("memo", entry)
+                    if (not duplicate and writing_intent.monster_requested(entry)
+                            and writing_intent.content_allowed(entry, lambda t: bool(JOURNAL_PRIVATE_RE.search(t)))):
                         _start_monster_hatch()
-                    self._respond(200, json.dumps({"ok": True, "file": rel}, ensure_ascii=False).encode("utf-8"),
+                    self._respond(200, json.dumps({"ok": True, "file": rel,
+                                  **({'client_id': client_id, 'duplicate': duplicate} if client_id is not None else {})},
+                                  ensure_ascii=False).encode("utf-8"),
                                   "application/json; charset=utf-8")
                     return
                 if name == "memo" and payload.get("source") == "calendar":
@@ -8949,6 +9926,7 @@ def _plugin_core():
         fm_str=_idx_fm_str, fm_date=_fm_date_val, log_date=resolve_log_date, done_date=resolve_done_date,
         task_prefix=TASK_PREFIX, log_prefix=LOG_PREFIX,
         review_items=lambda **options: collect_review_items(**options),
+        review_state=lambda: load_review_state(),
         markdown_target=lambda value: _vault_markdown_target(value),
         preview=lambda value: read_preview_md(value),
         mark_reviewed=lambda *args: mark_reviewed(*args),
@@ -8956,6 +9934,7 @@ def _plugin_core():
         append_ai_feedback=lambda payload: append_ai_feedback(payload),
         poll_git_changes=lambda: _git_changes_poll_loop(),
         is_private=lambda text: bool(JOURNAL_PRIVATE_RE.search(text)),
+        request_monster=lambda: _start_monster_hatch(),
         start_background_job=lambda *a, **k: start_background_job(*a, **k))
 
 

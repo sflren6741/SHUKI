@@ -32,12 +32,13 @@ vault の `base`（一覧・表）をそのままブラウザへ出すと、味�
 
 ## 1. 色 — 意味の予約と識別の分離
 
-トークンには2種類ある。**混ぜない**。
+トークンの用途は3種類に分ける。**混ぜない**。
 
 | 種別 | 例 | 用途 | 使ってよい場所 |
 |---|---|---|---|
 | 意味トークン | `--danger` `--warn` `--ok` `--info` | 状態・緊急度 | 期限バッジ・エラー・成功トースト |
 | 識別トークン | Area 10色（`--area-仕事` 等）、レアリティ4色 | カテゴリの見分け | **アイコンと小さなタグの文字色だけ**。面・帯・強調に使わない |
+| Emphasis | `--accent` / `--surface-highlight` | The primary decision or next action | One labeled recommendation card and its related Next label/row; see §1.1 |
 
 - Area配色（**2026-08-06 サイバー配色へ刷新**）は `非公開Area#F2589D`｜`人間関係#D96BE8`｜`自己理解#A87BF0`｜`仕事#6C8AF2`｜`英語#4FA6E8`｜`時間管理#35BEDC`｜`ハンドボール#3FD0C4`｜`健康#46D6A5`｜`娯楽#63DD82`｜`お金#9BE05C`。**`dashboard_theme.py` の `AREA_C` が唯一の正**（JS側に複製しない。`--area-<英字キー>` を `getComputedStyle` で読む）
   - 旧配色はテラコッタ／マスタード／オリーブ等のアース系で、既定テーマ cool-dark（スレート×インディゴ）と系統が噛み合わず浮いていた。新パレットは寒色〜電子色を色相順に10等分し、テーマの `--accent`(#7c8cf5)・`--teal`(#4fd1c5)・`--blue`(#5aa9e6) と同じ系統に揃えてある
@@ -47,7 +48,20 @@ vault の `base`（一覧・表）をそのままブラウザへ出すと、味�
 - **アクセント（`--accent`）は画面全体で1色に絞る**。「見やすいけどモダンに見えない」の主因は、彩度の高い色を同時に何本も主役として使ってしまうこと。意味トークン（`--danger`/`--warn`/`--ok`/`--info`）は状態表現なので別枠として共存してよいが、装飾目的で2本目のアクセントを足さない
 - **ニュートラル（`--bg`/`--card`/`--line`/`--muted`）は「完全な無彩色」か「アクセントと同系統のわずかな色相を残す」かを毎回どちらかに決め切る**。中途半端に色相が混ざったニュートラルが「配色が微妙」に見える主因（2026-08-03・配色刷新プロジェクトでユーザーと実物比較して確認）
 
-検証：本文コントラスト比 4.5:1・大文字（18px以上）3:1 を全トークン組で満たすこと。チャート系の色は dataviz skill の `validate_palette.js` を通す（既存ルール継承）。識別トークン（Area10色）は**アイコン＝graphical object なので 3:1 以上**、かつ**相互のCIE76色差20以上**を実測してから採用する。
+検証：本文コントラスト比 4.5:1・大文字（通常24 CSS px以上、太字は約18.67 CSS px以上）3:1 を全トークン組で満たすこと。チャート系の色は dataviz skill の `validate_palette.js` を通す（既存ルール継承）。識別トークン（Area10色）は**アイコン＝graphical object なので 3:1 以上**、かつ**相互のCIE76色差20以上**を実測してから採用する。
+
+## 1.1 Attention — one labeled decision, soft emphasis (approved 2026-10-15)
+
+Ren selected **B — Soft surface** after comparing three Balance previews. This is the shared rule for emphasizing important UI content; Balance is the first implementation, and other pages are not being redesigned in bulk.
+
+- **Choose the next decision before choosing its color.** Emphasize one primary recommendation with a clear heading and visible Next/Next step label. Keep supporting content and numerical values in normal text tokens. If there is no recommendation, do not manufacture one by coloring the first row.
+- **Use one accent hue and the approved soft treatment.** The recommendation card uses `--surface-highlight` and an accent border on all four sides. Its related row may repeat the faint tint and a small outlined Next label. A filled primary button remains the action. Do not introduce additional accent hues, category-colored panels, colored single edges on rounded cards, or a separate focal point for every important item.
+- **Keep emphasis separate from state, identity, priority, and keyboard focus.** Next means the current recommendation; it does not change Focus/Maintain/Intentionally quiet or imply urgency. State colors retain their existing meanings and small-marker treatment. Zero activity, an unset priority, or an unaccepted target suggestion does not by itself justify a warning. Area colors keep their existing identity-only uses.
+- **Never communicate the distinction through color alone.** Retain visible labels, accessible control names, and a visible keyboard focus outline. A pale surface is supplementary, so it need not itself reach 3:1 when the label and boundary provide the distinction. Required control/graphical cues must meet the relevant 3:1 non-text contrast requirement; normal text must meet 4.5:1.
+- **Reuse the shared theme tokens and preserve user settings.** Theme and accent selection remain in the existing shared palette. Check the actual text/background pairs, keyboard focus, and horizontal overflow at narrow widths in Light, Cool Dark, Milky, and Color-blind friendly themes. Render and inspect the result. Keep chart encoding separate and follow the dataviz skill when chart colors change.
+- **Use guidance as guidance, not a universal formula.** A mostly neutral page with restrained accents supports hierarchy. The 60–30–10 proportions are a starting heuristic, not a required pixel quota; add emphasis only when it clarifies the next decision.
+
+Evidence: [NN/g — Using Color to Enhance Your Design](https://www.nngroup.com/articles/color-enhance-design/), [GOV.UK — Colour](https://design-system.service.gov.uk/styles/colour/), and WCAG 2.2 [Use of Color](https://www.w3.org/WAI/WCAG22/Understanding/use-of-color.html), [Contrast (Minimum)](https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html), and [Non-text Contrast](https://www.w3.org/WAI/WCAG22/Understanding/non-text-contrast.html). These establish constraints and guidance; Ren's preview selection establishes the preferred treatment for SHUKI.
 
 ## 1.5 形 — 一辺だけ塗らない・中途半端に丸めない（2026-08-06 追加）
 
@@ -210,7 +224,7 @@ Nielsenの閾値をそのまま採用：0.1秒＝即時に感じる境界、1秒
 
 **④ 色は小さく・意味で付ける（デモで評価された点）**
 
-- 状態は**色付きのドット（8px）＋ラベル**で示す。ドットの色は意味トークン（`--ok` `--warn` `--info` `--muted`）。面全体を塗らない（§1・§1.5 と同じ方針）
+- 状態は**色付きのドット（8px）＋ラベル**で示す。ドットの色は意味トークン（`--ok` `--warn` `--info` `--muted`）。状態色で面全体を塗らない（§1・§1.5 と同じ方針）。Primary-decision emphasis uses the separate, approved soft treatment in §1.1.
   - **色だけで区別しない**：light では `--warn` と `--info` が同じアクセント青になる。「未着手・進行中＝中抜きリング／要対応＝塗り」のように形も変える（実装例：対話パネルの作業状態ドット・`dashboard_chat.py`）
   - `overflow-x:auto` の横スクロール行（タブ列など）の中では `::before` の当たり判定が切られる。そこは見た目どおり 32px（AA の 24px は満たす）で良しとする。`<select>` も `::before` を描けないので同じ扱い
 - **共通の器（一度直せば全ページに効く）**：ドロップダウン＝`dashboard_theme.SELECT_CSS`（パネル内32px／`.filter-bar` `.toolbar` 内40px）、ヘッダー等の `.hbtn`＝`dashboard_ui.RESPONSIVE_CSS`（32px＋当たり判定）、タブの `.mode-btn` と絞り込みバー＝`dashboard_theme.STANDARD_EXTRA_CSS`。**ページ側で個別に44pxを書かない**

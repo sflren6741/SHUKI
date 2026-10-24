@@ -26,6 +26,7 @@ decisions.py — 決裁（旧・朝スタンドアップ §2）の永続スト�
   "response_type": "yes_no" | "choice" | "text" | "datetime",  # 応答の型（旧データは自動推定）
   "options": [{"id": "a", "label": "A案"}],       # choice のときだけ
   "task_path": "04_Tasks/…/○○.md",   # 紐づくタスク（無ければ ""）
+  "related_files": ["06_Resources/…/context.md"],  # Optional explicit vault-relative Markdown sources
   "source": "inbox_monitor",           # 誰が積んだか
   "priority": 1,                        # 小さいほど上位。音声はこの上位3件だけ読む
   "created": "2026-07-31T07:00",
@@ -63,6 +64,7 @@ import hashlib
 import json
 import re
 import sys
+import dashboard_file_links
 from datetime import date, datetime
 from pathlib import Path
 
@@ -215,6 +217,24 @@ def _decorate_item(item: dict) -> dict:
     return _escalated(item) or item
 
 
+def related_paths(item: dict) -> list[str]:
+    """Explicit Markdown references only; never search or infer private context."""
+    extra = item.get("related_files") or []
+    if isinstance(extra, str):
+        extra = [extra]
+    if not isinstance(extra, list):
+        extra = []
+    paths = []
+    for value in [item.get("task_path"), *extra]:
+        try:
+            path = dashboard_file_links.normalise_vault_relative_path(value)
+        except ValueError:
+            continue
+        if path.lower().endswith(".md") and path not in paths:
+            paths.append(path)
+    return paths
+
+
 def make_id(question: str, task_path: str = "") -> str:
     """同じ問いには同じ id を与える（重複起票をハッシュだけで弾けるようにする）。
 
@@ -254,14 +274,30 @@ def save_open(items: list[dict]) -> None:
         json.dumps(items, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
+def _guidance_fields(raw: dict, options: list[dict]) -> dict:
+    """Keep explicit producer guidance; it never implies approval or verified availability."""
+    fields = {}
+    for key in ("proposed", "recommendation"):
+        value = raw.get(key)
+        if isinstance(value, str) and value.strip():
+            fields[key] = value.strip()
+    recommended = raw.get("recommended_option")
+    if isinstance(recommended, str) and any(o["id"] == recommended for o in options):
+        fields["recommended_option"] = recommended
+    return fields
+
+
 def add(new_items: list[dict], source: str = "") -> tuple[int, int]:
     """未決裁を追加する。既に同じ id があれば触らない（＝再掲が構造的に起きない）。
 
-    例外は1つだけ：選択肢の無い自由記述カード（text）と同じ id の提案が options 付きで届いたら、
+    例外：選択肢の無い自由記述カード（text）と同じ id の提案が options 付きで届いたら、
     カードを増やさずその選択肢を既存カードに足して choice にする（2026-10-09 新設。
     「自由記述だけはきつい」ため、補充便が既存カードを後から選択式へ直せるようにする）。
 
-    戻り値: (追加した件数＋選択肢を足した件数, 既存で飛ばした件数)
+    Missing guidance may also be filled for an existing open card. Existing answers, guidance,
+    question, status and identity are preserved; resolved cards are never reopened.
+
+    戻り値: (追加した件数＋補完した件数, 既存で飛ばした件数)
     """
     items = load_open()
     known = {d["id"] for d in items}
@@ -279,10 +315,23 @@ def add(new_items: list[dict], source: str = "") -> tuple[int, int]:
         options = _normalise_options(raw.get("options"))
         if did in known or did in resolved_ids:
             current = next((d for d in items if d["id"] == did), None)
+            enriched = False
             if (current is not None and options and not current.get("options")
                     and current.get("response_type") == "text"):
                 current["options"] = options
                 current["response_type"] = "choice"
+                enriched = True
+            if current is not None:
+                if not current.get("related_files") and raw.get("related_files"):
+                    paths = related_paths({"related_files": raw["related_files"]})
+                    if paths:
+                        current["related_files"] = paths
+                        enriched = True
+                for key, value in _guidance_fields(raw, current.get("options") or []).items():
+                    if not current.get(key):
+                        current[key] = value
+                        enriched = True
+            if enriched:
                 added += 1
             else:
                 skipped += 1
@@ -309,6 +358,9 @@ def add(new_items: list[dict], source: str = "") -> tuple[int, int]:
         }
         if options:
             record["options"] = options
+        record.update(_guidance_fields(raw, options))
+        if raw.get("related_files"):
+            record["related_files"] = related_paths({"related_files": raw["related_files"]})
         items.append(record)
         known.add(did)
         added += 1
@@ -393,11 +445,19 @@ def apply_choice(dec_id: str, choice: str, comment: str = "",
         if not answer_text:
             return None
         if hit.get("response_type") == "datetime":
-            try:
-                datetime.strptime(answer_text, "%Y-%m-%d %H:%M")
-            except ValueError:
-                return None
-            hit["session_date"], hit["session_time"] = answer_text.split(" ", 1)
+            if answer_text == "auto_schedule":
+                hit["scheduling_mode"] = "auto"
+                hit.pop("session_date", None)
+                hit.pop("session_time", None)
+            else:
+                try:
+                    datetime.strptime(answer_text, "%Y-%m-%d %H:%M")
+                except ValueError:
+                    return None
+                hit["session_date"], hit["session_time"] = answer_text.split(" ", 1)
+                hit["scheduling_mode"] = "manual"
+        elif answer_text == "auto_schedule":
+            return None
         hit["answer"] = answer_text
         hit["status"] = "回答"
         hit["resolved"] = now
@@ -423,6 +483,23 @@ def apply_choice(dec_id: str, choice: str, comment: str = "",
                 return None
             save_open(items)
     return hit
+
+
+def scheduling_answer(dec_id: str) -> dict:
+    """Return a recorded scheduling answer; an unsubmitted/open card grants no work."""
+    for path in sorted(RESOLVED_DIR.glob("*.jsonl"), reverse=True):
+        for line in reversed(path.read_text(encoding="utf-8").splitlines()):
+            item = json.loads(line)
+            if item.get("id") != dec_id:
+                continue
+            if (item.get("response_type") == "datetime" and item.get("status") == "回答"
+                    and item.get("answer")):
+                return item
+            if (item.get("escalated_type") == "datetime" and item.get("status") == "選択"
+                    and item.get("selected_option") == "c"):
+                return item
+            raise ValueError("Decision does not contain a scheduling answer")
+    raise ValueError("Recorded scheduling answer not found")
 
 
 def for_audio(limit: int = 3) -> list[dict]:

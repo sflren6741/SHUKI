@@ -87,9 +87,14 @@ function Invoke-DashboardRestart {
     }
     if ($Defer) {
         $powershellExe = Join-Path $PSHOME 'powershell.exe'
+        $restartLogBase = Join-Path ([System.IO.Path]::GetTempPath()) ('shuki-dashboard-restart-' + [guid]::NewGuid().ToString('N'))
+        # A detached worker must not retain the caller's CLI output pipe: it waits
+        # for that same chat to finish, which otherwise creates a shutdown cycle.
         Start-Process -FilePath $powershellExe -ArgumentList @('-NoProfile', '-File',
             ('"' + $PSCommandPath + '"'), '-Restart', '-ExpectedProcessId', $original.ProcessId) `
-            -WorkingDirectory $ScriptDir -WindowStyle Hidden | Out-Null
+            -WorkingDirectory $ScriptDir -WindowStyle Hidden `
+            -RedirectStandardOutput ($restartLogBase + '.out.log') `
+            -RedirectStandardError ($restartLogBase + '.err.log') | Out-Null
         Write-Output 'Restart worker launched; it waits for active work and verifies HTTP before reporting success.'
         return
     }
@@ -108,7 +113,7 @@ function Invoke-DashboardRestart {
                 throw 'Original server identity changed; no process was stopped.'
             }
             $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($original.ProcessId)" |
-                Where-Object { $_.Name -ne 'conhost.exe' -and $_.CommandLine -notmatch 'stt_server\.py' })
+                Where-Object { ($null -eq $_.CreationDate -or $_.CreationDate -ge $original.CreationDate) -and $_.Name -ne 'conhost.exe' -and $_.CommandLine -notmatch 'stt_server\.py' })
             $recent = (Invoke-WebRequest ($Url + 'log') -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop).Content
             foreach ($jobMatch in [regex]::Matches($recent, '(?:voice-|work-|journal-)?\d{15,}')) {
                 [void]$seenJobs.Add($jobMatch.Value)
@@ -139,7 +144,7 @@ function Invoke-DashboardRestart {
             throw 'Original server identity changed; no process was stopped.'
         }
         $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($original.ProcessId)" |
-            Where-Object { $_.Name -ne 'conhost.exe' -and $_.CommandLine -notmatch 'stt_server\.py' })
+            Where-Object { ($null -eq $_.CreationDate -or $_.CreationDate -ge $original.CreationDate) -and $_.Name -ne 'conhost.exe' -and $_.CommandLine -notmatch 'stt_server\.py' })
         if ($children.Count -gt 0) { throw 'New dashboard work started; no process was stopped.' }
         Write-RestartState 'restarting' 'Restarting the verified, idle SHUKI server.' $original.ProcessId
         Stop-Process -Id $original.ProcessId -Confirm:$false -ErrorAction Stop

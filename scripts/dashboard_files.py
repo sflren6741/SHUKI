@@ -85,6 +85,28 @@ PAGE = """<!DOCTYPE html>
   #list.compact .item-title { font-size:.82rem; font-weight:normal; }
   #list.compact .item-summary, #list.compact .fm-badges { display:none; }
   #list.compact .item-emoji { display:none; }
+  .item-cover { display:none; }
+  #list.cards { display:grid; grid-template-columns:minmax(0, 1fr); gap:12px; align-items:start; }
+  #list.cards-2 { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+  #list.cards > .group-heading, #list.cards > #rq-sentinel,
+  #list.cards > .item.open { grid-column:1 / -1; }
+  #list.cards .item { min-width:0; margin-bottom:0; }
+  #list.cards .item-hd { display:grid; grid-template-columns:minmax(0, 1fr) auto; gap:8px; padding:12px; position:relative; }
+  .item-more-images { display:none; }
+  #list.cards .item-more-images { display:block; position:absolute; top:18px; right:18px;
+    padding:0 5px; border:1px solid var(--line); border-radius:8px;
+    background:var(--card); color:var(--muted); font-size:16px; line-height:18px; }
+  #list.cards .item-emoji { display:none; }
+  #list.cards .item-cover { display:block; grid-column:1 / -1; width:100%;
+    aspect-ratio:16 / 9; max-height:240px; object-fit:contain; border-radius:8px; background:var(--bg); }
+  #list.cards .item-cover.portrait { aspect-ratio:4 / 3; }
+  .item-diagram { display:none; }
+  #list.cards .item-diagram { display:block; grid-column:1 / -1; min-width:0;
+    aspect-ratio:16 / 9; max-height:240px; overflow:hidden; border-radius:8px; background:var(--bg); pointer-events:none; }
+  .item-diagram > img { width:100%; height:100%; object-fit:contain; }
+  .item-diagram .shuki-markmap { width:100%; height:100%; }
+  #list.cards .item-summary { overflow-wrap:anywhere; }
+  .item-hd:focus-visible { outline:2px solid var(--accent); outline-offset:-3px; }
   .fm-badge { font-size:.66rem; border-radius:4px; padding:1px 6px; background:var(--line); color:var(--muted); }
   .fm-badge.s-in-progress { background:color-mix(in srgb, var(--teal) 18%, transparent); color:var(--teal); }
   .fm-badge.s-on-hold, .fm-badge.s-pending { background:color-mix(in srgb, var(--accent) 18%, transparent); color:var(--accent); }
@@ -93,10 +115,12 @@ PAGE = """<!DOCTYPE html>
   .fm-badge.a-review { background:color-mix(in srgb, var(--accent) 18%, transparent); color:var(--accent); }
   /* 更新バッジ行: ビューチップ(v-row)とは質が異なる更新通知のため
      別行・別スタイルで分離する。0件時は行ごと非表示（JS側で display:none を切り替える）。 */
-  .u-row { display:none; align-items:center; gap:8px; padding:8px 16px; flex-shrink:0; }
+  .u-row { display:none; align-items:center; flex-wrap:wrap; gap:8px; padding:8px 16px; flex-shrink:0; }
   .u-badge { display:inline-flex; align-items:center; gap:5px; border-radius:8px;
-    padding:6px 14px; font-size:.8rem; font-weight:bold; cursor:pointer; border:1px solid transparent; }
-  .u-badge:hover { filter:brightness(1.08); }
+    min-height:44px; padding:6px 12px; font-size:.8rem; font-weight:500; cursor:pointer;
+    background:var(--card); border:1px solid var(--line); color:var(--muted); text-decoration:none; }
+  .u-badge:hover { color:var(--fg); border-color:var(--accent); }
+  .u-badge:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
   .u-badge.u-task { background:color-mix(in srgb, var(--teal) 16%, transparent); color:var(--teal); border-color:color-mix(in srgb, var(--teal) 35%, transparent); }
   .u-badge.u-file { background:color-mix(in srgb, var(--blue) 16%, transparent); color:var(--blue); border-color:color-mix(in srgb, var(--blue) 35%, transparent); }
   .item-caret { color:var(--muted); font-size:.75rem; flex-shrink:0; margin-top:3px; transition:transform .15s; }
@@ -129,6 +153,13 @@ PAGE = """<!DOCTYPE html>
   .update-context { color:var(--muted); }
   .update-choice { margin-top:8px; padding-top:8px; border-top:1px solid var(--line); }
   .update-task { font-size:.74rem; color:var(--muted); margin-top:8px; }
+  .update-preview a.work-session-link { position:relative; display:inline-flex; align-items:center; gap:8px;
+    min-height:32px; margin:6px 0; padding:4px 8px; border:1px solid var(--line); border-radius:8px;
+    color:var(--fg); background:var(--card); text-decoration:none; font-size:.8125rem; }
+  .work-session-link::before { content:''; position:absolute; inset:-7px -1px; }
+  .update-preview .work-session-link svg.shuki-icon { width:16px; height:16px; margin:0; border-radius:0; flex-shrink:0; }
+  .update-preview a.work-session-link:hover { background:var(--surface-control); border-color:var(--control-line); }
+  .work-session-link:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
   /* 最大化（2026-09-03、ユーザーの指摘で2度修正）: 開いたドキュメントを画面いっぱい
      （inset:0・角丸なし）に広げて読める状態にする。ドックより手前に出す（z-index比較）。
      ボタンは「固定ツールバー(.pv-toolbar) + スクロール本体(.pv-body)」という構造にして
@@ -237,6 +268,8 @@ PAGE = """<!DOCTYPE html>
     <select id="f-density" onchange="onDensityChange()" title="表示方式">
       <option value="list">リスト</option>
       <option value="compact">コンパクト</option>
+      <option value="cards-1">Cards · 1 column</option>
+      <option value="cards-2">Cards · 2 columns</option>
     </select>
   </div>
 
@@ -268,7 +301,8 @@ function loadPreviewMermaid() {
       s.src = '/assets/mermaid.min.js';
       s.onload = () => {
         mermaid.initialize({
-          startOnLoad: false, theme: 'base',
+          startOnLoad: false, theme: 'base', securityLevel: 'strict',
+          flowchart: {htmlLabels:false},
           themeVariables: {
             background: _cv('--bg'), primaryColor: _cv('--card'), primaryTextColor: _cv('--fg'),
             primaryBorderColor: _cv('--line'), lineColor: _cv('--muted'),
@@ -455,11 +489,146 @@ function onSortMetricChange() {
   savePrefs();
 }
 
-/* ===== 表示方式（リスト/コンパクト・2026-08-20） =====
-   board.py の f-density と同じ発想。CSSクラストグルのみで完結し再描画は不要。 */
+/* One existing selector controls layout; cover metadata stays in Obsidian. */
 function applyDensity() {
   const v = document.getElementById('f-density').value;
-  document.getElementById('list').classList.toggle('compact', v === 'compact');
+  const list = document.getElementById('list');
+  list.classList.toggle('compact', v === 'compact');
+  list.classList.toggle('cards', v === 'cards-1' || v === 'cards-2');
+  list.classList.toggle('cards-2', v === 'cards-2');
+  loadCovers();
+}
+function loadCovers() {
+  if (!document.getElementById('list').classList.contains('cards')) return;
+  document.querySelectorAll('.item-cover[data-src]').forEach(img => {
+    img.src = img.dataset.src;
+    delete img.dataset.src;
+  });
+  document.querySelectorAll('.item-diagram[data-path]').forEach(box => {
+    if (!box.dataset.observed) {
+      box.dataset.observed = '1';
+      diagramObserver.observe(box);
+    }
+  });
+}
+function coverSource(value) {
+  if (typeof value !== 'string' || !value.trim()) return '';
+  const cover = value.trim();
+  if (/^\\/game\\/art\\/[0-9a-f]{10}\\.jpg\\?size=card&v=[0-9]+-[0-9]+$/.test(cover)) return cover;
+  if (/^\\/game\\/monster\\/[0-9a-f]{10}\\.png\\?size=card&v=[0-9]+-[0-9]+$/.test(cover)) return cover;
+  if (cover.startsWith('/game/')) return '';
+  if (cover.toLowerCase().startsWith('https://') || cover.toLowerCase().startsWith('http://')) {
+    try {
+      const url = new URL(cover);
+      return url.username || url.password ? '' : url.href;
+    } catch(e) { return ''; }
+  }
+  if (/^[a-z][a-z0-9+.-]*:/i.test(cover) || cover.startsWith('//')) return '';
+  return '/vault-image?path=' + encodeURIComponent(cover);
+}
+
+// Gallery fragments are fetched only for visible cards, with two renders in flight.
+const diagramQueue = [], diagramCache = new Map();
+let diagramActive = 0, diagramSequence = 0;
+const diagramObserver = new IntersectionObserver(entries => {
+  entries.forEach(en => {
+    if (en.isIntersecting) {
+      diagramObserver.unobserve(en.target);
+      diagramQueue.push(en.target);
+    }
+  });
+  pumpDiagrams();
+}, {rootMargin:'200px'});
+
+function pumpDiagrams() {
+  while (diagramActive < 2 && diagramQueue.length) {
+    const box = diagramQueue.shift();
+    if (!box.isConnected) continue;
+    if (!document.getElementById('list').classList.contains('cards')) {
+      delete box.dataset.observed;
+      continue;
+    }
+    diagramActive++;
+    loadDiagram(box).catch(() => removeThumbnail(box)).finally(() => {
+      diagramActive--; pumpDiagrams();
+    });
+  }
+}
+
+function removeThumbnail(node) {
+  node.parentElement?.querySelector('.item-more-images')?.remove();
+  node.remove();
+}
+
+async function loadDiagram(box) {
+  const key = box.dataset.path + '|' + box.dataset.version;
+  let data = diagramCache.get(key);
+  if (!data) {
+    const response = await fetch('/files/thumbnail?p=' + encodeURIComponent(box.dataset.path),
+      {signal:AbortSignal.timeout(15000)});
+    if (!response.ok) throw new Error('Thumbnail HTTP ' + response.status);
+    data = await response.json();
+    if (!['svg','mermaid','markmap'].includes(data.kind) || typeof data.source !== 'string') {
+      throw new Error('Invalid thumbnail');
+    }
+    diagramCache.set(key, data);
+    if (diagramCache.size > 32) {
+      const oldest = diagramCache.keys().next().value;
+      const old = diagramCache.get(oldest);
+      if (old.url) URL.revokeObjectURL(old.url);
+      diagramCache.delete(oldest);
+    }
+  }
+  if (!box.isConnected) return;
+  if (data.kind === 'markmap') {
+    const pre = document.createElement('pre');
+    pre.className = 'markmap'; pre.textContent = data.source;
+    box.replaceChildren(pre);
+    await loadMarkmapLibrary();
+    await window.shukiRenderMarkmaps(box, {fit:true});
+    return;
+  }
+  if (!data.url) {
+    let svg = data.source;
+    if (data.kind === 'mermaid') {
+      await loadPreviewMermaid();
+      const id = 'file-thumb-' + diagramSequence++;
+      try { svg = (await mermaid.render(id, data.source)).svg; }
+      finally { document.getElementById('d' + id)?.remove(); }
+      if (/aria-roledescription="error"/.test(svg)) throw new Error('Diagram render failed');
+    }
+    // SVG is decoded as an image, never inserted as active gallery HTML.
+    const doc = new DOMParser().parseFromString(svg, 'image/svg+xml');
+    const root = doc.documentElement;
+    if (root.localName !== 'svg' || doc.querySelector('parsererror')) throw new Error('Invalid SVG');
+    root.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    const size = root.getAttribute('viewBox')?.split(/[ ,]+/).map(Number);
+    if (size?.length === 4 && size[2] > 0 && size[3] > 0) {
+      root.setAttribute('width', size[2]); root.setAttribute('height', size[3]);
+    }
+    // Carry inherited theme tokens into the isolated image, preserving variables
+    // defined by the chart itself and leaving native CSS fallback resolution intact.
+    const style = getComputedStyle(document.documentElement);
+    const localTokens = new Set([...svg.matchAll(/(--[\\w-]+)\\s*:/g)].map(m => m[1]));
+    for (const token of style) {
+      if (token.startsWith('--') && !localTokens.has(token)) {
+        root.style.setProperty(token, style.getPropertyValue(token));
+      }
+    }
+    const aliases = {'--background-primary':'--bg', '--background-secondary':'--card',
+      '--background-modifier-border':'--line', '--text-normal':'--fg', '--text-muted':'--muted'};
+    Object.entries(aliases).forEach(([token, inherited]) => {
+      if (!localTokens.has(token) && !root.style.getPropertyValue(token)) {
+        root.style.setProperty(token, style.getPropertyValue(inherited));
+      }
+    });
+    svg = new XMLSerializer().serializeToString(root);
+    data.url = URL.createObjectURL(new Blob([svg], {type:'image/svg+xml'}));
+  }
+  const img = document.createElement('img');
+  img.alt = ''; img.decoding = 'async';
+  img.onerror = () => removeThumbnail(box); img.src = data.url;
+  box.replaceChildren(img);
 }
 function onDensityChange() {
   applyDensity();
@@ -522,6 +691,8 @@ function buildQueue(vis) {
 function render(vis) {
   const list = document.getElementById('list');
   const empty = document.getElementById('empty-state');
+  diagramObserver.disconnect();
+  diagramQueue.length = 0;
   list.innerHTML = '';
   if (rqObserver) { rqObserver.disconnect(); rqObserver = null; }
   if (!vis.length) { empty.style.display = 'flex'; return; }
@@ -560,6 +731,7 @@ function renderMore() {
     }
     rqObserver.observe(s);
   }
+  loadCovers();
 }
 
 function renderItem(t) {
@@ -568,6 +740,9 @@ function renderItem(t) {
   card.dataset.path = t.path || t.virtual_id || '';
   const hd = document.createElement('div');
   hd.className = 'item-hd';
+  hd.tabIndex = 0;
+  hd.setAttribute('role', 'button');
+  hd.setAttribute('aria-expanded', 'false');
   const attnBadges = (t.attention || []).map(k =>
     '<span class="fm-badge a-' + esc(k) + '">' + esc(attentionLabel(k)) + '</span>').join('');
   const updateBadges = (t.update_kinds || []).map(k =>
@@ -588,6 +763,33 @@ function renderItem(t) {
       (badges ? '<div class="fm-badges">' + badges + '</div>' : '') +
     '</div>' +
     '<div class="item-caret">▶</div>';
+  const cover = coverSource(t.cover);
+  if (cover) {
+    const img = document.createElement('img');
+    img.className = 'item-cover';
+    img.alt = '';
+    img.loading = 'lazy';
+    img.decoding = 'async';
+    img.referrerPolicy = 'no-referrer';
+    img.onload = () => img.classList.toggle('portrait', img.naturalHeight > img.naturalWidth);
+    img.dataset.src = cover;
+    img.onerror = () => removeThumbnail(img);
+    hd.prepend(img);
+  } else if (t.diagram_thumbnail && !t.virtual) {
+    const box = document.createElement('div');
+    box.className = 'item-diagram';
+    box.dataset.path = t.path; box.dataset.version = t.diagram_thumbnail;
+    box.setAttribute('aria-hidden', 'true');
+    hd.prepend(box);
+  }
+  if (t.more_images && hd.querySelector('.item-cover, .item-diagram')) {
+    const hint = document.createElement('span');
+    hint.className = 'item-more-images'; hint.textContent = '⋯';
+    hint.title = 'More images in this note';
+    hint.setAttribute('role', 'img');
+    hint.setAttribute('aria-label', 'More images in this note');
+    hd.appendChild(hint);
+  }
   card.appendChild(hd);
 
   const pv = document.createElement('div');
@@ -597,7 +799,18 @@ function renderItem(t) {
       ? '<div class="pv-body"><div class="update-preview">' + virtualPreviewHtml(t) + '</div></div>'
       : '<div class="pv-body"><span class="pv-loading">読み込み中…</span></div>');
   card.appendChild(pv);
-  hd.onclick = () => t.virtual ? toggleVirtualPreview(card) : togglePreview(card, pv, t.path);
+  hd.onclick = () => {
+    if (t.virtual) toggleVirtualPreview(card);
+    else togglePreview(card, pv, t.path);
+    hd.setAttribute('aria-expanded', String(card.classList.contains('open')));
+  };
+  hd.onkeydown = e => {
+    if (e.target === hd && (e.key === 'Enter' || e.key === ' ')) {
+      e.preventDefault();
+      hd.click();
+    }
+  };
+  if (t.entry_id) setupJournalCover(pv, t.entry_id);
   setupMaxiBtn(pv);
   appendUpdateActions(card, t);
   return card;
@@ -612,7 +825,52 @@ function updateKindLabel(key) {
 }
 
 function vaultFileHref(path) { return '/files?p=' + encodeURIComponent(String(path)); }
-function vaultPreviewHref(path) { return '/files/preview?p=' + encodeURIComponent(String(path)); }
+function vaultPreviewHref(path) {
+  const key = String(path);
+  return /^journal:[a-zA-Z0-9-]{12,64}$/.test(key)
+    ? '/files/journal-preview?entry=' + encodeURIComponent(key.slice(8))
+    : '/files/preview?p=' + encodeURIComponent(key);
+}
+
+function setupJournalCover(pv, entry) {
+  const btn = document.createElement('button');
+  btn.type = 'button'; btn.textContent = 'Thumbnail';
+  const status = document.createElement('span'); status.setAttribute('role', 'status');
+  pv.querySelector('.pv-toolbar').append(btn, status);
+  btn.onclick = async e => {
+    e.stopPropagation(); btn.disabled = true;
+    try {
+      const response = await fetch('/files/journal-covers?entry=' + encodeURIComponent(entry), {cache:'no-store'});
+      if (!response.ok) throw new Error();
+      const data = await response.json();
+      const select = document.createElement('select');
+      select.setAttribute('aria-label', 'Diary thumbnail');
+      select.style.maxWidth = 'min(100%, 16rem)';
+      data.options.forEach(o => {
+        const option = document.createElement('option');
+        option.value = o.key; option.textContent = o.label; select.appendChild(option);
+      });
+      select.value = data.selected;
+      select.onchange = async () => {
+        select.disabled = true; status.textContent = 'Saving…';
+        try {
+          const saved = await fetch('/files/journal-cover', {method:'POST',
+            headers:{'Content-Type':'application/json'}, body:JSON.stringify({entry, choice:select.value})});
+          if (!saved.ok) throw new Error();
+          const result = await saved.json();
+          const row = ALL.find(item => item.entry_id === entry);
+          if (row && result.record) {
+            delete row.cover; delete row.more_images;
+            Object.assign(row, result.record); applyFilters();
+            showFilesToast('Thumbnail saved');
+          } else { status.textContent = 'Saved. Reopen Files to refresh the card.'; }
+        } catch (_) { status.textContent = 'Could not save thumbnail.'; }
+        finally { select.disabled = false; }
+      };
+      btn.replaceWith(select);
+    } catch (_) { status.textContent = 'Could not load thumbnails.'; btn.disabled = false; }
+  };
+}
 
 function taskLinkHtml(t) {
   if (!t.task_path) return '';
@@ -625,7 +883,8 @@ function virtualPreviewHtml(t) {
   const rows = [];
   (t.review_items || []).forEach(r => {
     rows.push('<h3>レビュー対象</h3>'
-      + (r.summary ? '<p>' + esc(r.summary) + '</p>' : '')
+      + (r.summary ? '<p style="white-space:pre-wrap">' + esc(r.summary) + '</p>' : '')
+      + (r.work_key && t.task_path ? '<p><a class="work-session-link" href="/board?work=' + encodeURIComponent(t.task_path) + '" title="Read the full result and supporting notes">' + shukiIcon('calendar') + ' Open work session</a></p>' : '')
       + (r.source ? '<p class="update-context">分類: ' + esc(r.label || r.source) + '</p>' : ''));
   });
   if (t.task_path) rows.push('<p class="update-task">タスク: ' + esc(t.task_title || t.task_path) + '</p>');
@@ -763,8 +1022,7 @@ async function loadPreview(pv, path, nested) {
 // ```markmap（入れ子リスト → 整列ツリー型マインドマップ・2026-10-13）。描画本体は対話ドックと共用の
 // /assets/shuki-markmap.js で、ブロックがあるプレビューを開いた時だけ読み込む。
 let _pvMarkmapLoading = null;
-function renderMarkmap(root) {
-  if (!root.querySelectorAll('pre.markmap').length) return;
+function loadMarkmapLibrary() {
   if (!_pvMarkmapLoading) {
     _pvMarkmapLoading = new Promise((resolve, reject) => {
       const s = document.createElement('script');
@@ -774,7 +1032,11 @@ function renderMarkmap(root) {
       document.head.appendChild(s);
     });
   }
-  _pvMarkmapLoading.then(() => window.shukiRenderMarkmaps(root)).catch(e => console.warn('markmap:', e));
+  return _pvMarkmapLoading;
+}
+function renderMarkmap(root) {
+  if (!root.querySelectorAll('pre.markmap').length) return;
+  loadMarkmapLibrary().then(() => window.shukiRenderMarkmaps(root)).catch(e => console.warn('markmap:', e));
 }
 function renderMermaid(root) {
   renderMarkmap(root);
@@ -875,6 +1137,10 @@ async function init() {
     buildDefaultViews();
     loadCustomViews();
     loadPrefs();
+    if (new URLSearchParams(location.search).get('work_review') === '1') {
+      FILTERS = {attention:['review']};
+      document.getElementById('f-search').value = '';
+    }
     applyFilters();
     openTargetFromQuery();
   } catch(e) {

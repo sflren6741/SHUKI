@@ -4,6 +4,8 @@ Google Calendar ユーティリティ — 共有ライブラリ
 
   from calendar_utils import get_calendar_service, get_events, create_allday_event
 """
+import hashlib
+import re
 import threading
 from datetime import datetime, date, timezone, timedelta
 from pathlib import Path
@@ -20,6 +22,14 @@ CALENDAR_TOKEN = shuki_paths.secret_file("calendar_token.json")
 
 class CalendarNotConnected(RuntimeError):
     pass
+
+
+def validate_event_title(summary: str) -> None:
+    """Reject visibly lost Unicode before any Calendar connection or write."""
+    if not isinstance(summary, str) or not summary.strip():
+        raise ValueError("A Calendar title is required")
+    if "\ufffd" in summary or re.search(r"\?{3,}", summary):
+        raise ValueError("Calendar title appears encoding-damaged; reload the original text using UTF-8")
 
 
 def get_calendar_service(*, authorize=False):
@@ -54,7 +64,14 @@ _READ_SERVICE = {"stamp": None, "service": None}
 _READ_LOCK = threading.Lock()
 
 
-def get_events(time_min: datetime, time_max: datetime, max_results: int = 100) -> list[dict]:
+def get_events(
+    time_min: datetime,
+    time_max: datetime,
+    max_results: int = 100,
+    *,
+    fields: str | None = None,
+    paginate: bool = False,
+) -> list[dict]:
     """指定期間のイベントを取得して返す（開始時刻順）。"""
     with _READ_LOCK:
         try:
@@ -66,18 +83,29 @@ def get_events(time_min: datetime, time_max: datetime, max_results: int = 100) -
             _READ_SERVICE["service"] = get_calendar_service()
             _READ_SERVICE["stamp"] = stamp
         try:
-            result = _READ_SERVICE["service"].events().list(
-                calendarId="primary",
-                timeMin=time_min.isoformat(),
-                timeMax=time_max.isoformat(),
-                maxResults=max_results,
-                singleEvents=True,
-                orderBy="startTime",
-            ).execute()
+            items, page_token = [], None
+            while True:
+                params = {
+                    "calendarId": "primary",
+                    "timeMin": time_min.isoformat(),
+                    "timeMax": time_max.isoformat(),
+                    "maxResults": max_results,
+                    "singleEvents": True,
+                    "orderBy": "startTime",
+                }
+                if fields:
+                    params["fields"] = fields
+                if page_token:
+                    params["pageToken"] = page_token
+                result = _READ_SERVICE["service"].events().list(**params).execute()
+                items.extend(result.get("items", []))
+                page_token = result.get("nextPageToken")
+                if not paginate or not page_token:
+                    break
         except Exception:
             _READ_SERVICE["service"] = None
             raise
-    return result.get("items", [])
+    return items
 
 
 def format_event_time(event: dict) -> str:
@@ -96,6 +124,7 @@ def create_allday_event(
     calendar_id: str = "primary",
 ) -> str:
     """終日イベントを作成してイベントIDを返す。"""
+    validate_event_title(summary)
     service = get_calendar_service()
     body = {
         "summary": summary,
@@ -122,6 +151,7 @@ def create_event(
     start_time/end_time（"HH:MM"、JST固定）を両方渡すと時刻指定予定、渡さなければ
     event_date 1日だけの終日予定（create_allday_event と同じ形）になる。
     """
+    validate_event_title(summary)
     service = get_calendar_service()
     body: dict = {"summary": summary}
     if location:
@@ -141,6 +171,89 @@ def create_event(
         body["end"] = {"date": (event_date + timedelta(days=1)).isoformat()}
     created = service.events().insert(calendarId=calendar_id, body=body).execute()
     return created["id"]
+
+
+def get_decision_availability(start: datetime, end: datetime, *, service=None) -> list[dict]:
+    """Fresh, paginated primary-calendar events for a bounded scheduling window."""
+    if (start.utcoffset() is None or end.utcoffset() is None or end <= start
+            or end - start > timedelta(days=31)):
+        raise ValueError("Use timezone-aware bounds spanning at most 31 days")
+    service = service if service is not None else get_calendar_service()
+    events, page_token = [], None
+    while True:
+        result = service.events().list(
+            calendarId="primary", timeMin=start.isoformat(), timeMax=end.isoformat(),
+            singleEvents=True, orderBy="startTime", maxResults=2500,
+            pageToken=page_token).execute()
+        events.extend(result.get("items", []))
+        page_token = result.get("nextPageToken")
+        if not page_token:
+            return events
+
+
+def create_decision_event(decision_id: str, summary: str, start: datetime,
+                          duration_minutes: int, *, location: str = "",
+                          description: str = "") -> dict:
+    """Create once for a recorded scheduling answer; never invite, update or delete.
+
+    The scheduled processor determines duration/deadline/preferences from permitted
+    source notes, then supplies one candidate. A fresh primary-calendar check here
+    prevents overlap; a stable Google event ID prevents repeat-run duplicates.
+    """
+    import decisions
+    from googleapiclient.errors import HttpError
+
+    answer = decisions.scheduling_answer(decision_id)
+    if not isinstance(summary, str) or not summary.strip() or len(summary) > 200:
+        raise ValueError("A session title of at most 200 characters is required")
+    validate_event_title(summary)
+    if type(duration_minutes) is not int or not 0 < duration_minutes <= 1440:
+        raise ValueError("A verified duration from 1 to 1440 minutes is required")
+    if start.utcoffset() is None:
+        raise ValueError("A timezone-aware start is required")
+    jst = timezone(timedelta(hours=9))
+    start = start.astimezone(jst)
+    end = start + timedelta(minutes=duration_minutes)
+    if answer.get("scheduling_mode") != "auto" and answer.get("answer") != "auto_schedule" \
+            and answer.get("selected_option") != "c":
+        if start.strftime("%Y-%m-%d %H:%M") != answer["answer"]:
+            raise ValueError("Start differs from the user's confirmed time")
+    event_id = "shuki" + hashlib.sha256(decision_id.encode("utf-8")).hexdigest()
+    service = get_calendar_service()
+    try:
+        existing = service.events().get(calendarId="primary", eventId=event_id).execute()
+    except HttpError as error:
+        if error.resp.status != 404:
+            raise
+    else:
+        if (existing.get("id") != event_id or existing.get("status") == "cancelled" or
+                not existing.get("start", {}).get("dateTime") or
+                not existing.get("end", {}).get("dateTime") or
+                existing.get("extendedProperties", {}).get("private", {}).get("shuki_decision") != decision_id):
+            raise ValueError("The decision event was cancelled or no longer matches; review it")
+        validate_event_title(existing.get("summary", ""))
+        return existing
+    if start <= datetime.now(jst):
+        raise ValueError("The selected time has passed; leave the request pending")
+    busy = get_decision_availability(start, end, service=service)
+    if any(event.get("status") != "cancelled" and event.get("transparency") != "transparent"
+           and not any(a.get("self") and a.get("responseStatus") == "declined"
+                       for a in event.get("attendees", [])) for event in busy):
+        raise ValueError("Calendar conflict; leave the request pending for a new slot")
+    body = {"id": event_id, "summary": summary.strip(),
+            "start": {"dateTime": start.isoformat(), "timeZone": "Asia/Tokyo"},
+            "end": {"dateTime": end.isoformat(), "timeZone": "Asia/Tokyo"},
+            "location": str(location)[:200], "description": str(description)[:1000],
+            "extendedProperties": {"private": {"shuki_decision": decision_id}}}
+    service.events().insert(calendarId="primary", body=body, sendUpdates="none").execute()
+    # A successful insert without a verified record is not reported as completion.
+    created = service.events().get(calendarId="primary", eventId=event_id).execute()
+    if (created.get("id") != event_id or created.get("status") == "cancelled"
+            or created.get("summary") != body["summary"]
+            or datetime.fromisoformat(created.get("start", {}).get("dateTime", "0001-01-01")) != start
+            or datetime.fromisoformat(created.get("end", {}).get("dateTime", "0001-01-01")) != end):
+        raise ValueError("Calendar creation could not be verified; retain the queue item")
+    return created
 
 
 def today_range() -> tuple[datetime, datetime]:

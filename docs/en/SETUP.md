@@ -158,3 +158,12 @@ You can also talk directly to Claude Code's terminal chat. Say "Add a note: ..."
 
 > This repo isn't "the right answer" — it's a **starting point**. The more you grow it to fit your own thinking, the better it works.
 </content>
+# Public release: local voice input
+
+Voice input uses the bundled local `shuki_core/speech.py` implementation when no custom `stt_script` is configured. It requires no paid speech-provider account. Soniox, offline memo delivery and optional feature plugins are excluded from this release.
+
+Install `faster-whisper==1.2.1` and `av==16.1.0` with the same Python interpreter that launches the dashboard; for the Windows repository layout, run `.\scripts\.venv\Scripts\python.exe -m pip install faster-whisper==1.2.1 av==16.1.0` from the repository root. See [the maintained implementation's installation instructions](https://github.com/SYSTRAN/faster-whisper) for its requirements.
+
+The dashboard starts without these optional packages and gives a setup message if voice is requested. The multilingual `small` model runs on CPU with int8 computation. First use downloads public weights into the external SHUKI data directory under `speech/models`; later requests use that local cache. Audio stays in memory and is not uploaded to a speech provider. Test your own microphone after installation; quality and speed depend on your hardware and recording.
+
+Existing custom local engines remain supported through private `stt_script`/`stt_venv_python` paths; empty/null custom paths select the bundled implementation. Microphone access requires localhost or HTTPS. No account connection, settings change or activation on another installation follows automatically from publication.

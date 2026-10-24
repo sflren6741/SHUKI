@@ -66,6 +66,9 @@ scripts/**
 !scripts/dashboard_calendar.py
 !scripts/dashboard_chat.py
 !scripts/dashboard_chat_actions.py
+!scripts/dashboard_commands.py
+!scripts/work_sessions.py
+!scripts/test_work_sessions.py
 !scripts/dashboard_decisions.py
 !scripts/dashboard_facets.py
 !scripts/dashboard_file_links.py
@@ -88,6 +91,7 @@ scripts/**
 !scripts/i18n_scan.py
 !scripts/model_registry.json
 !scripts/prompt_layers.py
+!scripts/writing_intent.py
 !scripts/test_prompt_layers.py
 !scripts/model_registry.py
 !scripts/model_executor.py
@@ -135,3 +139,8 @@ scripts/dashboard_assets/logo_prototypes/**
 
 # Credentials live outside the vault (beside the repository); if a copy ever lands here, never commit it.
 /shuki-secrets/
+
+# These integrations are private for this release (Ren's selected scope).
+scripts/dashboard_assets/offline-memo.js
+scripts/home_outbox.py
+scripts/dashboard_stt.py

@@ -11,7 +11,10 @@ dashboard_settings.json（このスクリプトと同じディレクトリ）に
 各ページの PALETTE のまま（テーマの全ページ横展開は将来の課題）。
 """
 import json
+import os
 import re
+import tempfile
+import threading
 from pathlib import Path
 
 import model_registry
@@ -19,9 +22,12 @@ import model_registry
 import shuki_paths
 
 SETTINGS_FILE = shuki_paths.code_store("core/dashboard_settings.json")
+_SETTINGS_WRITE_LOCK = threading.Lock()
 
 DEFAULT_NAME = "SHUKI"
 DEFAULT_MASCOT_COLOR = "#d6336c"
+DEFAULT_GRADIENT_SECONDARY = "#6550ae"
+COLOR_THEMES = ("soft-light", "soft-dark", "gradient")
 HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 # 配色テーマ（key -> (表示名, palette 9キー)）。
@@ -66,9 +72,29 @@ THEMES = {
         "red": "#c8434b", "teal": "#237f70", "blue": "#3f72c4",
     }),
     "colorblind": ("Color-blind friendly", {
-        "bg": "#f5f5f5", "fg": "#1a1a1a", "muted": "#595959",
-        "accent": "#0056b3", "card": "#ffffff", "line": "#d1d1d1",
+        "bg": "#f0f4f8", "fg": "#1a1a1a", "muted": "#495568",
+        "accent": "#004f80", "card": "#ffffff", "line": "#8190a2",
         "red": "#a63c00", "teal": "#005a8d", "blue": "#62449b",
+    }),
+    "colorblind-dark": ("Color-blind friendly · Dark", {
+        "bg": "#101820", "fg": "#f3f6fa", "muted": "#b4c2d1",
+        "accent": "#80caff", "card": "#1a2633", "line": "#7d91a6",
+        "red": "#ffb066", "teal": "#80caff", "blue": "#d4b6ff",
+    }),
+    "soft-light": ("Soft Light", {
+        "bg": "#f5f4fa", "fg": "#292637", "muted": "#5f596b",
+        "accent": "#6550ae", "card": "#ffffff", "line": "#e1deed",
+        "red": "#b42318", "teal": "#146c43", "blue": "#0056b3",
+    }),
+    "soft-dark": ("Soft Dark", {
+        "bg": "#101520", "fg": "#edf0f7", "muted": "#adb6c7",
+        "accent": "#92b6ff", "card": "#1a2231", "line": "#303d55",
+        "red": "#e2727a", "teal": "#4fd1c5", "blue": "#92b6ff",
+    }),
+    "gradient": ("Gradient", {
+        "bg": "#faf1ee", "fg": "#292637", "muted": "#5f596b",
+        "accent": "#a33a69", "card": "#ffffff", "line": "#ead7e0",
+        "red": "#b42318", "teal": "#146c43", "blue": "#0056b3",
     }),
 }
 DEFAULT_THEME = "cool-dark"
@@ -76,16 +102,45 @@ DEFAULT_THEME = "cool-dark"
 # One picker maps presets to the existing stored theme/style fields.
 # Only Matrix retains a separate style internally; legacy palettes stay available.
 THEME_PRESETS = {
+    "soft": ("Soft", "soft-light", "standard"),
+    "soft-light": ("Soft Light", "soft-light", "standard"),
+    "soft-dark": ("Soft Dark", "soft-dark", "standard"),
+    "gradient": ("Gradient", "gradient", "standard"),
+    "basic": ("Basic", "light", "standard"),
     "milky": ("Milky", "milky", "standard"),
     "light": ("Light", "light", "standard"),
     "cool-dark": ("Cool Dark", "cool-dark", "standard"),
     "colorblind": ("Color-blind friendly", "colorblind", "standard"),
+    "colorblind-dark": ("Color-blind friendly · Dark", "colorblind-dark", "standard"),
     "matrix": ("Matrix", "cool-dark", "matrix"),
     "warm-dark": ("Warm Dark", "warm-dark", "standard"),
     "mono-dark": ("Monochrome", "mono-dark", "standard"),
     "forest": ("Forest", "forest", "standard"),
 }
-PRIMARY_THEME_PRESETS = ("milky", "light", "cool-dark", "colorblind")
+# Older palettes remain loadable and can be recalled from favorites.
+PRIMARY_THEME_PRESETS = ("soft", "gradient", "basic", "colorblind", "matrix")
+THEME_FAMILIES = {
+    "soft": {"light": "soft-light", "dark": "soft-dark"},
+    "gradient": {"light": "gradient", "dark": "gradient"},
+    "basic": {"light": "light", "dark": "cool-dark"},
+    "colorblind": {"light": "colorblind", "dark": "colorblind-dark"},
+}
+
+
+def theme_family(theme, style="standard"):
+    if style in ("matrix", "matrix-hc"):
+        return "matrix"
+    return next((key for key, modes in THEME_FAMILIES.items() if theme in modes.values()), theme)
+
+
+def appearance_mode(settings):
+    theme = settings.get("theme", DEFAULT_THEME)
+    if theme == "gradient":
+        return settings.get("gradient_mode", "light")
+    return "light" if theme in ("light", "soft-light", "colorblind", "milky") else "dark"
+
+
+MAX_THEME_FAVORITES = 24
 
 STYLES = {
     "standard": "標準",
@@ -175,6 +230,9 @@ def _defaults():
         "decor": DEFAULT_DECOR,
         "lang": DEFAULT_LANG,
         "accent": "",  # "" = テーマ既定のアクセント色。#RRGGBB なら上書き
+        "gradient_secondary": DEFAULT_GRADIENT_SECONDARY,
+        "gradient_mode": "light",
+        "theme_favorites": [],
         "mascot_enabled": True,
         "mascot_color": DEFAULT_MASCOT_COLOR,
         "sections": {k: True for k in ALL_SECTION_KEYS},
@@ -191,7 +249,41 @@ def _defaults():
 def standard_presentation():
     """The Standard preset changes appearance/layout, keeping personal preferences."""
     defaults = _defaults()
-    return {key: defaults[key] for key in ("theme", "style", "accent", "sections", "order", "nav")}
+    return {key: defaults[key] for key in ("theme", "style", "accent", "gradient_secondary",
+                                         "gradient_mode", "sections", "order", "nav")}
+
+
+def sanitize_theme_favorites(raw):
+    """Keep bounded, appearance-only snapshots; never accept unrelated settings."""
+    favorites = []
+    seen = set()
+    if not isinstance(raw, list):
+        return favorites
+    for item in raw[:MAX_THEME_FAVORITES]:
+        if not isinstance(item, dict):
+            continue
+        theme, style = item.get("theme"), item.get("style", DEFAULT_STYLE)
+        if not isinstance(theme, str) or theme not in THEMES:
+            continue
+        if not isinstance(style, str) or style not in STYLES:
+            continue
+        accent = item.get("accent", "")
+        secondary = item.get("gradient_secondary", DEFAULT_GRADIENT_SECONDARY)
+        if not isinstance(accent, str) or (accent and not HEX_RE.fullmatch(accent)):
+            continue
+        if not isinstance(secondary, str) or not HEX_RE.fullmatch(secondary):
+            continue
+        favorite = dict(theme=theme, style=style, accent=accent.lower(),
+                        gradient_secondary=secondary.lower(),
+                        gradient_mode="dark" if item.get("gradient_mode") == "dark" else "light")
+        signature = tuple(favorite.values())
+        if signature in seen:
+            continue
+        seen.add(signature)
+        name = item.get("name", "")
+        favorite["name"] = name.strip()[:60] if isinstance(name, str) and name.strip() else THEME_PRESETS["matrix" if style != "standard" else theme][0]
+        favorites.append(favorite)
+    return favorites
 
 
 def sanitize(raw, base=None):
@@ -210,6 +302,11 @@ def sanitize(raw, base=None):
         d["lang"] = raw["lang"]
     accent = str(raw.get("accent", "")).strip()
     d["accent"] = accent if HEX_RE.match(accent) else ""
+    secondary = str(raw.get("gradient_secondary", "")).strip()
+    d["gradient_secondary"] = secondary.lower() if HEX_RE.fullmatch(secondary) else DEFAULT_GRADIENT_SECONDARY
+    d["gradient_mode"] = "dark" if raw.get("gradient_mode") == "dark" else "light"
+    if "theme_favorites" in raw:
+        d["theme_favorites"] = sanitize_theme_favorites(raw["theme_favorites"])
     # mascot_wander (chat-panel roaming) was removed on 2026-10-09; a stored value is dropped here.
     if isinstance(raw.get("mascot_enabled"), bool):
         d["mascot_enabled"] = raw["mascot_enabled"]
@@ -277,21 +374,68 @@ def load_settings():
 
 def save_settings(raw):
     """POST /settings のペイロードを検証・正規化して保存し、正規化後の dict を返す。"""
+    with _SETTINGS_WRITE_LOCK:
+        return _save_settings(raw)
+
+
+def _save_settings(raw):
     current = load_settings()
     raw_in = raw if isinstance(raw, dict) else {}
     if isinstance(raw, dict) and raw.get("reset"):
         raw = {"plugins": current["plugins"]}
     elif isinstance(raw, dict):
-        # The Settings page no longer edits plugin activation, the name or home sections
-        # (2026-10-11); keep what is saved for fields the payload leaves out.
-        raw = {**{k: current[k] for k in ("plugins", "name", "sections", "order")}, **raw}
+        # Autosave sends only edited fields; retain unrelated preferences and
+        # changes made by another Settings tab or the conversation effort picker.
+        raw = {**current, **raw}
+        if isinstance(raw_in.get("model_effort"), dict):
+            raw["model_effort"] = {**current["model_effort"], **raw_in["model_effort"]}
         if raw.get("presentation_mode") == "standard" and "sections" not in raw_in:
             # Standard restores the home layout the page can no longer edit.
             raw.update({k: standard_presentation()[k] for k in ("sections", "order")})
     d = sanitize(raw)
     SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    SETTINGS_FILE.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=SETTINGS_FILE.parent,
+                                         prefix=SETTINGS_FILE.name + ".", suffix=".tmp", delete=False) as handle:
+            temporary = Path(handle.name)
+            json.dump(d, handle, ensure_ascii=False, indent=1)
+        os.replace(temporary, SETTINGS_FILE)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
     return d
+
+
+def mix_color(color, surface, amount):
+    """Blend a chosen color into an opaque surface (amount is the color's share)."""
+    return "#" + "".join(f"{round(int(color[i:i+2], 16) * amount + int(surface[i:i+2], 16) * (1-amount)):02x}"
+                         for i in (1, 3, 5))
+
+
+def _contrast(a, b):
+    def luminance(color):
+        channels = [int(color[i:i+2], 16) / 255 for i in (1, 3, 5)]
+        return sum((v / 12.92 if v <= .04045 else ((v + .055) / 1.055) ** 2.4) * weight
+                   for v, weight in zip(channels, (.2126, .7152, .0722)))
+    high, low = sorted((luminance(a), luminance(b)), reverse=True)
+    return (high + .05) / (low + .05)
+
+
+def color_theme_surfaces(settings, palette=None):
+    """Opaque gradient endpoints; a second hue is decoration, never a second action color."""
+    pal = palette if palette is not None else effective_palette(settings)
+    seed = settings.get("accent", "")
+    if not HEX_RE.fullmatch(str(seed)):
+        seed = THEMES[settings["theme"]][1]["accent"]
+    secondary = settings.get("gradient_secondary", DEFAULT_GRADIENT_SECONDARY)
+    if not HEX_RE.fullmatch(str(secondary)):
+        secondary = DEFAULT_GRADIENT_SECONDARY
+    gradient = settings.get("theme") == "gradient"
+    return {
+        "theme-start": mix_color(seed, pal["card"], .18),
+        "theme-end": mix_color(secondary if gradient else seed, pal["card"], .18 if gradient else .04),
+    }
 
 
 def effective_palette(settings):
@@ -300,6 +444,33 @@ def effective_palette(settings):
     accent = settings.get("accent", "")
     if accent and HEX_RE.match(accent):
         pal["accent"] = accent
+    if settings.get("theme") in ("colorblind", "colorblind-dark"):
+        # User accents remain customizable, but readable; status hues stay independent.
+        dark = settings["theme"] == "colorblind-dark"
+        for step in range(101):
+            candidate = mix_color(pal["accent"], "#ffffff" if dark else "#000000", 1 - step / 100)
+            if min(_contrast(candidate, pal[key]) for key in ("bg", "card")) >= 4.6:
+                pal["accent"] = candidate
+                break
+    if settings.get("theme") in COLOR_THEMES:
+        seed = pal["accent"]
+        dark = settings["theme"] == "soft-dark" or (
+            settings["theme"] == "gradient" and settings.get("gradient_mode") == "dark")
+        pal.update(bg=mix_color(seed, "#0e1118" if dark else "#ffffff", .06),
+                   card=mix_color(seed, "#1a202b", .06) if dark else "#ffffff",
+                   line=mix_color(seed, "#343c4a" if dark else "#ffffff", .22),
+                   fg="#edf0f7" if dark else "#292637", muted="#adb6c7" if dark else "#5f596b")
+        if dark:
+            pal.update(red="#e2727a", teal="#4fd1c5", blue="#92b6ff")
+        surfaces = [pal["bg"], pal["card"], *color_theme_surfaces(settings, pal).values()]
+        # The 0.1 margin covers RGB rounding between gradient endpoints.
+        # Surface hues stay chosen; ink shades adapt without changing their semantic role.
+        for key in ("fg", "muted", "accent", "red", "teal", "blue"):
+            for step in range(101):
+                candidate = mix_color(pal[key], "#ffffff" if dark else "#000000", 1 - step / 100)
+                if min(_contrast(candidate, surface) for surface in surfaces) >= 4.6:
+                    pal[key] = candidate
+                    break
     return pal
 
 

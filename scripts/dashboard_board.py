@@ -36,7 +36,7 @@ _ICON_CONCEPT = dashboard_icons.ui_icon_svg("brain", 15)
 PAGE = """<!DOCTYPE html>
 <html lang="ja"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-""" + dashboard_ui.pwa_head() + dashboard_chat.assets_head() + """
+""" + dashboard_ui.pwa_head() + dashboard_chat.assets_head() + """<script defer src="/work-sessions.js"></script>
 <title> タスクボード</title>
 <style>
   * { box-sizing:border-box; margin:0; }
@@ -305,6 +305,8 @@ PAGE = """<!DOCTYPE html>
   .preview-diff-hunk { padding:3px 8px; color:var(--accent); background:color-mix(in srgb, var(--accent) 8%, transparent); }
   /* margin-bottom が無く、直下の .dp-quest（margin-top:0）と隙間ゼロで接していた分の直し（2026-08-13） */
   .dp-acts { margin-top:10px; margin-bottom:14px; display:flex; gap:6px; flex-wrap:wrap; }
+  .dp-work-note { width:100%; font-size:.75rem; color:var(--muted); }
+  .dp-acts button:disabled { opacity:.65; cursor:not-allowed; }
   .act-btn { background:none; border:1px solid var(--line); color:var(--muted);
     border-radius:2px; padding:6px 12px; cursor:pointer; font-size:.8rem; font-family:inherit;
     min-height:36px; }
@@ -331,7 +333,8 @@ PAGE = """<!DOCTYPE html>
   /* 「元に戻す」だけはクリックさせる（トースト本体は pointer-events:none のまま）。 */
   #toast .t-undo { pointer-events:auto; margin-left:12px; background:none; font-family:inherit;
     border:1px solid var(--accent); color:var(--accent); border-radius:2px; padding:2px 9px;
-    font-size:.76rem; cursor:pointer; min-height:26px; }
+    font-size:.76rem; cursor:pointer; min-height:44px; min-width:44px; }
+  #toast .t-undo:focus-visible {outline:2px solid var(--accent);outline-offset:2px;}
   #toast .t-undo:hover { background:color-mix(in srgb, var(--accent) 14%, transparent); }
 """ + dashboard_ui.RESPONSIVE_CSS + """
   /* board 固有のモバイル調整: 詳細パネルをボトムシート化・タブバーは inflow なので通常フロー */
@@ -729,6 +732,9 @@ async function init() {
     loadPrefs();       /* 前回のグループ軸・並び順・締切フィルタを復帰（描画より前） */
     drawFocusBand();   /* 前回選んだフォーカスが残っていれば復帰（消えたタスクなら自動解除） */
     applyFilters();
+    const requestedTask = new URLSearchParams(location.search).get('work_task');
+    const requestedRecord = ALL.find(t => t.path === requestedTask);
+    if (requestedRecord) showDetail(requestedRecord.id);
   } catch(e) {
     document.getElementById('loading').textContent = '読み込みエラー: ' + e;
   }
@@ -1521,6 +1527,18 @@ function showDetail(tid) {
     + esc(t.title) + '" data-exec-label="' + esc(t.title)
     + '" title="このタスクの進め方をすり合わせて完了まで進める">""" + _ICON_PLAY + """ 一手</a>';
 
+  const workButton = document.createElement('button');
+  workButton.type = 'button'; workButton.className = 'act-btn';
+  workButton.textContent = t.work_session_unavailable ? 'Work session unavailable' : 'Work session';
+  if (t.work_session_unavailable) {
+    workButton.disabled = true;
+    workButton.setAttribute('aria-describedby','dp-work-note');
+  } else workButton.dataset.workTask = t.path;
+  acts.appendChild(workButton);
+  if (t.work_session_unavailable) {
+    const note = document.createElement('p'); note.id = 'dp-work-note'; note.className = 'dp-work-note';
+    note.textContent = t.work_session_unavailable; acts.appendChild(note);
+  }
   document.getElementById('detail-panel').classList.add('open');
   document.getElementById('detail-overlay').classList.add('open');
 }
@@ -1530,9 +1548,13 @@ function closeDetail() {
 }
 
 /* ===== ステータス変更 → /queue ===== */
+const STATUS_BUSY = new Set();
 async function changeStatus(tid, newStatus, isUndo) {
   const t = MAP[tid];
-  if (!t) return;
+  if (!t || STATUS_BUSY.has(tid)) return;
+  STATUS_BUSY.add(tid);
+  const buttons=[...document.querySelectorAll('[data-change-to][data-task-id="'+CSS.escape(tid)+'"]')];
+  buttons.forEach(b=>b.disabled=true);
   const prevStatus = t.status;   /* 「元に戻す」で戻す先。押す前の値を控える */
   const payload = {
     task_path: t.path, task_title: t.title,
@@ -1570,13 +1592,18 @@ async function changeStatus(tid, newStatus, isUndo) {
       /* 完了・キャンセルは誤クリックの取り消し動機が強い。パネルを自動で畳む分、
          1手で戻せる逃げ道をここに置く（無いと「フィルタON→探す→開く→押す」の4手になる）。 */
       showToast('""" + _ICON_CHECK + """ ' + (ST_LABEL[newStatus] || newStatus) + 'に変更を予約しました。次便で反映します',
-                false, { label: '元に戻す', fn: () => changeStatus(tid, prevStatus, true) });
+                false, { label: '元に戻す', fn: () => {
+                  if(t.status!==newStatus) {showToast('The task changed again. Open it to choose its status.',true);return;}
+                  changeStatus(tid, prevStatus, true);
+                } });
     }
     if (leaves) setTimeout(closeDetail, 700);   /* エフェクト(0.72s)を見届けてから畳む */
     else showDetail(tid);
     applyFilters();
   } catch(e) {
     showToast('""" + _ICON_CROSS + """ 予約できませんでした（' + e + '）', true);
+  } finally {
+    STATUS_BUSY.delete(tid);buttons.forEach(b=>b.disabled=false);
   }
 }
 
@@ -1584,18 +1611,30 @@ async function changeStatus(tid, newStatus, isUndo) {
 let toastTimer = null;
 function showToast(msg, isErr, undo) {
   const el = document.getElementById('toast');
+  el.setAttribute('role',isErr?'alert':'status');
+  el.setAttribute('aria-live',isErr?'assertive':'polite');
   el.innerHTML = msg;
   if (undo) {
     const b = document.createElement('button');
     b.className = 't-undo';
     b.textContent = undo.label;
-    b.onclick = () => { clearTimeout(toastTimer); el.className = ''; undo.fn(); };
+    b.onfocus = () => clearTimeout(toastTimer);
+    b.onblur = () => { clearTimeout(toastTimer); dismiss(); };
+    b.onclick = () => { clearTimeout(toastTimer); el.className = ''; el.replaceChildren(); undo.fn(); };
     el.appendChild(b);
   }
   el.className = 'show' + (isErr ? ' err' : '');
   clearTimeout(toastTimer);
   /* 取り消しは押す間が要るので少し長く出す */
-  toastTimer = setTimeout(() => { el.className = ''; }, undo ? 5200 : 2800);
+  const dismiss=()=>{toastTimer=setTimeout(()=>{
+    if(undo&&(el.contains(document.activeElement)||el.matches(':hover'))) {dismiss();return;}
+    el.className='';el.replaceChildren();
+  },undo?10000:2800);};
+  const pause=()=>clearTimeout(toastTimer);
+  el.onpointerenter=pause;el.onfocusin=pause;
+  el.onpointerleave=()=>{if(!el.contains(document.activeElement)){pause();dismiss();}};
+  el.onfocusout=()=>{pause();dismiss();};
+  dismiss();
 }
 
 /* ===== イベント委譲 ===== */

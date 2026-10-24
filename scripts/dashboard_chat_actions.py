@@ -206,7 +206,7 @@ def handle(data):
         if op == "status":
             keys = [k for k in data.get("keys") or [] if isinstance(k, str)][:50]
             recs = _records()
-            return 200, {"done": {k: _public(recs[k]) for k in keys if k in recs}}
+            return 200, {"done": {k: _public(recs[k]) for k in keys if k in recs and recs[k].get("kind") in ("calendar", "task")}}
         if op == "check":
             events = data.get("events")
             if not isinstance(events, list) or not events:
@@ -219,6 +219,8 @@ def handle(data):
             raise ValueError("bad kind or key")
         with _LOCK:  # 連打・2端末同時押しでも1回だけ実行する
             prev = _records().get(key)
+            if prev and prev.get("kind") != kind:
+                raise ValueError("Action identity is already in use")
             if prev:
                 return 200, {"ok": True, "already": True, **_public(prev)}
             if kind == "calendar":

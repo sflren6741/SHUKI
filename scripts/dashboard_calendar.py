@@ -30,7 +30,7 @@ CALENDAR_MEMO_MAX_CHARS = 4000
 PAGE = """<!DOCTYPE html>
 <html lang="ja"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-""" + dashboard_ui.pwa_head() + dashboard_chat.assets_head() + """
+""" + dashboard_ui.pwa_head() + dashboard_chat.assets_head() + """<script defer src="/work-sessions.js"></script>
 <title> カレンダー</title>
 <link rel="stylesheet" href="/english/style.css">
 <script src="/english/routine.js"></script>
@@ -97,6 +97,7 @@ PAGE = """<!DOCTYPE html>
     height:32px; min-height:32px; border:1px solid var(--line); border-radius:999px; padding:0 10px;
     font:inherit; font-size:.78rem; font-weight:800; cursor:pointer; white-space:nowrap; }
   .cal-action::before { content:''; position:absolute; inset:-7px 0; }
+  .cal-action[href] { text-decoration:none; }
   /* The create action is the primary control in its modal, so it uses M size. */
   .cal-modal-actions .cal-action { height:40px; min-height:40px; padding:0 16px; }
   .cal-modal-actions .cal-action::before { inset:-3px -1px; }
@@ -251,7 +252,7 @@ PAGE = """<!DOCTYPE html>
     .cal-fab { left:14px; bottom:78px; width:40px; height:40px; }
   }
   @media (max-width:360px) { main.cal-page { padding-left:0; padding-right:0; }
-    .cal-grid { gap:2px; } .cal-month-nav { gap:6px; } .cal-month-label { font-size:.86rem; }
+    .cal-grid { gap:2px; } .cal-month-nav { gap:6px; padding-inline:7px; } .cal-month-label { font-size:.86rem; }
     .cal-results-controls { padding:0 4px; } }
 """ + dashboard_ui.RESPONSIVE_CSS + """
 </style>
@@ -436,31 +437,60 @@ PAGE = """<!DOCTYPE html>
     return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   }
 
-  function noteHtml(n) {
+  function studyVideoUrl(value) {
+    try {
+      const url = new URL(String(value));
+      const id = url.searchParams.get('v') || '';
+      if (url.origin === 'https://www.youtube.com' && url.pathname === '/watch' && /^[A-Za-z0-9_-]{11}$/.test(id))
+        return 'https://www.youtube.com/watch?v=' + id;
+    } catch (_) {}
+    return '';
+  }
+
+  function studyFeedback(article, text) {
+    if (typeof window.exec !== 'function') throw new Error('The conversation panel is unavailable. Your note is saved; reload to get feedback.');
+    const prompt = 'Help me check my understanding of IELTS Academic Writing Task 1. Use only the selected study record below. '
+      + 'Do not access private or archived writing, rewrite my answer, or assign an IELTS band. '
+      + 'Identify one misunderstanding if the note supports it, give one targeted practice task, and ask one recall question. '
+      + 'Do not claim to have watched or verified the video. Reply concisely in English. Selected study record: '
+      + JSON.stringify({event: article.querySelector('.cal-event-summary').textContent,
+        date: article.dataset.start, video: studyVideoUrl(article.dataset.studyVideo), note: text});
+    window.exec('', encodeURIComponent(prompt), 'IELTS study feedback');
+  }
+
+  function noteHtml(n, study) {
     const done = n.status === 'done';
     const badge = n.processing === 'record' ? '記録のみ' : (done ? 'AI処理済み' : 'AI処理待ち');
     return '<div class="cal-note">'
       + '<div class="cal-note-head"><span>' + escHtml(String(n.ts || '').slice(5, 16)) + '</span>'
       + '<span class="cal-note-status' + (done ? ' done' : '') + '">' + badge + '</span></div>'
-      + '<div class="cal-note-text">' + escHtml(n.text) + '</div></div>';
+      + '<div class="cal-note-text">' + escHtml(n.text) + '</div>'
+      + (study && n.processing === 'ai' ? '<button type="button" class="cal-action cal-record" data-study-feedback>Get feedback</button>' : '')
+      + '</div>';
   }
 
   function eventHtml(ev) {
     const notes = ev.notes || [];
-    const notesHtml = notes.length ? notes.map(noteHtml).join('') : '';
-    return '<article class="cal-event" data-event-id="' + escHtml(ev.id) + '" data-start="' + escHtml(ev.start || '') + '">'
+    const video = studyVideoUrl(ev.study_video_url);
+    const notesHtml = notes.length ? notes.map(n => noteHtml(n, Boolean(video))).join('') : '';
+    return '<article class="cal-event" data-event-id="' + escHtml(ev.id) + '" data-start="' + escHtml(ev.start || '')
+      + '" data-study-video="' + escHtml(video) + '">'
       + '<div class="cal-event-head" data-toggle>'
       + '<span class="cal-event-time">' + escHtml(ev.time_label) + '</span>'
       + '<span class="cal-event-summary">' + escHtml(ev.summary || '（無題の予定）') + '</span>'
       + (notes.length ? ('<span class="cal-event-note-count">' + shukiIcon('pencil')) + notes.length + '</span>' : '')
       + '</div>'
-      + (ev.location ? '<div class="cal-event-loc">' + escHtml(ev.location) + '</div>' : '')
+      + (ev.work_task ? '<div class="cal-event-loc"><button type="button" class="cal-action" data-work-task="' + escHtml(ev.work_task) + '">Task context / result</button></div>' : '')
+      + (ev.location ? '<div class="cal-event-loc">'  + escHtml(ev.location) + '</div>' : '')
+      + (video ? '<div class="cal-event-loc"><a class="cal-action" href="' + escHtml(video)
+        + '" target="_blank" rel="noopener noreferrer">Watch video</a></div>' : '')
       + (notesHtml ? '<div class="cal-event-notes">' + notesHtml + '</div>' : '')
       + '<div class="cal-event-form" data-form>'
-      + '<textarea maxlength="' + MAX_CHARS + '" placeholder="この予定についてメモを書く…" data-text></textarea>'
+      + '<textarea maxlength="' + MAX_CHARS + '" placeholder="' + (video
+        ? 'What I learned · My own example · What I want feedback on' : 'この予定についてメモを書く…') + '" data-text></textarea>'
       + '<div class="cal-event-actions">'
       + '<button type="button" class="cal-action cal-record" data-save="record">記録として保存</button>'
-      + '<button type="button" class="cal-action cal-ai" data-save="ai">AIに送る</button>'
+      + '<button type="button" class="cal-action cal-ai" data-save="ai">' + (video ? 'Save &amp; get feedback' : 'AIに送る') + '</button>'
       + '</div><div class="cal-status" data-status></div></div>'
       + '<button type="button" class="cal-event-toggle" data-toggle-btn>+ メモを書く</button>'
       + '</article>';
@@ -495,6 +525,17 @@ PAGE = """<!DOCTYPE html>
   // ── 予定メモの開閉・保存（今日/今週の一覧・今月の日詳細パネルの両方から使う共通ハンドラ） ──
   function bindNoteDelegation(container) {
     container.addEventListener('click', (e) => {
+      const feedback = e.target.closest('[data-study-feedback]');
+      if (feedback) {
+        const article = feedback.closest('.cal-event');
+        try { studyFeedback(article, feedback.closest('.cal-note').querySelector('.cal-note-text').textContent); }
+        catch (error) {
+          article.querySelector('[data-form]').classList.add('open');
+          const status = article.querySelector('[data-status]');
+          status.textContent = error.message; status.classList.add('error');
+        }
+        return;
+      }
       const toggle = e.target.closest('[data-toggle], [data-toggle-btn]');
       if (toggle) {
         const article = toggle.closest('.cal-event');
@@ -533,6 +574,13 @@ PAGE = """<!DOCTYPE html>
           if (!response.ok) throw new Error(result.error || ('HTTP ' + response.status));
           textarea.value = '';
           status.textContent = processing === 'ai' ? 'AIに送りました。既存の回収便で整理します。' : '記録として保存しました。';
+          if (processing === 'ai' && studyVideoUrl(article.dataset.studyVideo)) {
+            try { studyFeedback(article, text); }
+            catch (error) {
+              status.textContent = error.message; status.classList.add('error');
+              return;  // Preserve the saved-note message and allow feedback after reloading.
+            }
+          }
           if (window.SFX) SFX.memo_sent();
           if (currentRange === 'month') { await loadMonth(currentAnchor); } else { await load(currentRange); }
         }).catch(() => {

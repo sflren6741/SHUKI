@@ -26,6 +26,17 @@ import dashboard_settings  # モデルごとのeffort設定（model_effort）。
 import model_registry
 import shuki_i18n  # 表示言語の切り替え（lang=ja なら素通し）
 
+# Shared with /upload and the Home picker so their supported formats stay aligned.
+UPLOAD_ALLOWED_EXT = frozenset({
+    ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff", ".svg",
+    ".heic", ".heif", ".avif", ".pdf",
+    ".ppt", ".pptx", ".pps", ".ppsx", ".odp",
+    ".doc", ".docx", ".odt", ".rtf", ".xls", ".xlsx", ".ods",
+    ".txt", ".md", ".csv", ".tsv", ".json", ".jsonl", ".yaml", ".yml",
+    ".xml", ".html", ".htm", ".log", ".zip",
+})
+UPLOAD_ACCEPT = ",".join(sorted(UPLOAD_ALLOWED_EXT))
+
 # fable のみ CLI にエイリアスが無く "fable" では 404 になるためフルID指定が必要（2026-07-19 判明）。
 # Muse はローカル Ollama（local/ プレフィックス・cost=$0・PC外に出ない）。ollama launch claude で
 # 疎通確認済みだが reasoning が長く一言の応答にも数十秒かかる（実測41秒・2026-08-14）。実験的。
@@ -553,11 +564,13 @@ CSS = r'''
     min-width:0; max-width:100%; box-sizing:border-box; }
   .attach-chip .attach-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .attach-chip.up { opacity:.6; }
-  .attach-chip .ax { cursor:pointer; color:var(--muted); flex:none; }
+  .attach-chip .ax { cursor:pointer; color:var(--muted); flex:none; background:none;
+    border:0; padding:4px; display:inline-flex; }
+  .attach-chip .ax:focus-visible { outline:2px solid var(--accent); }
   .attach-chip .ax:hover { color:var(--red); }
   .msg-att { font-size:.74rem; color:var(--blue); margin-bottom:4px; }
   /* 🗂 Vault内ファイルを添付ソースに選ぶピッカー（2026-09-14 P1／添付機能の拡張）。
-     ローカルアップロード(/upload)と同じ pendingAttachment 経由で送信するため、
+     ローカルアップロード(/upload)と同じ pendingAttachments 経由で送信するため、
      送信ロジック(sendFollowup)は一切変更しない＝ソースが増えるだけ。 */
   /* The picker panels live inside .chat-input-row, so bottom:100% anchors them to the controls
      instead of the fixed #result dock (whose top can move above the viewport on tall conversations). */
@@ -837,11 +850,11 @@ HTML = r'''
         <button class="vp-item" onclick="closeAttachmentMenu();byId('chat-file').click()">__ICON_ATTACH__ ファイルを添付</button>
         <button class="vp-item" onclick="closeAttachmentMenu();toggleVaultPicker()">__ICON_FOLDER__ Vault内のファイルを探す</button>
       </div>
-      <input id="chat-file" type="file" accept="image/*,.pdf,.txt,.md,.csv" hidden
+      <input id="chat-file" type="file" accept="__UPLOAD_ACCEPT__" multiple hidden
         onchange="onFilePick(this)">
       <textarea id="chat-input" rows="1" placeholder="続きを入力…（Enterで送信）"
         oninput="rememberChatDraft();updateSendBtn()" onfocus="chatInputFocus(this)"
-        onpointerdown="chatInputPointer=true" onkeydown="chatInputKey(event)"></textarea>
+        onpointerdown="chatInputPointer=true" onkeydown="chatInputKey(event)" onpaste="onChatPaste(event)"></textarea>
       <button id="chat-add-btn" type="button" class="rbtn" onclick="toggleChatAddMenu()"
         title="Add attachments or skills" aria-label="Add attachments or skills"
         aria-expanded="false" aria-controls="chat-add-menu">__ICON_PLUS__</button>
@@ -931,7 +944,7 @@ JS = r'''
   let watchStartTs = 0;
   const WATCH_MAX_MS = 10 * 60 * 1000;  // 10分で自動停止（開けっぱなし放置の電池対策）
   const WATCH_INTERVAL_MS = 4000;
-  let pendingAttachment = null;  // {name, path} または {name, uploading:true}
+  let pendingAttachments = [];  // {name, path, uploading, error}; identity survives async uploads
   // 各ページの静的アプリJS（activity/concept_game/finance_game/habit_funnel）が別の意味の $ を
   // const 宣言しているため、ドック側は名前を分けて衝突を避ける（2026-08-11）。
   const byId = id => document.getElementById(id);
@@ -1289,18 +1302,29 @@ JS = r'''
   function renderAttach() {  // 添付チップの再描画（未添付なら箱ごと隠す）
     const box = byId('chat-attach');
     updateSendBtn();
-    if (!pendingAttachment) { box.hidden = true; box.innerHTML = ''; return; }
-    const nm = pendingAttachment.name.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    box.hidden = false;
-    if (pendingAttachment.uploading) {
-      box.innerHTML = '<span class="attach-chip up">' + UI_ICONS.loading
-        + ' <span class="attach-name">' + nm + '</span></span>';
-    } else {
-      box.innerHTML = '<span class="attach-chip">' + UI_ICONS.attach + ' <span class="attach-name">' + nm + '</span>'
-        + ' <span class="ax" onclick="clearAttach()">' + UI_ICONS.cross + '</span></span>';
-    }
+    box.hidden = !pendingAttachments.length;
+    box.replaceChildren(...pendingAttachments.map(att => {
+      const chip = document.createElement('span');
+      chip.className = 'attach-chip' + (att.uploading ? ' up' : '');
+      chip.innerHTML = att.uploading ? UI_ICONS.loading : UI_ICONS.attach;
+      const name = document.createElement('span');
+      name.className = 'attach-name';
+      name.textContent = att.name + (att.error ? ' — Upload failed: ' + att.error : '');
+      name.title = name.textContent;
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'ax';
+      remove.innerHTML = UI_ICONS.cross;
+      remove.setAttribute('aria-label', 'Remove attachment: ' + att.name);
+      remove.onclick = () => {
+        pendingAttachments = pendingAttachments.filter(item => item !== att);
+        renderAttach();
+      };
+      chip.append(name, remove);
+      return chip;
+    }));
   }
-  function clearAttach() { pendingAttachment = null; renderAttach(); }
+  function clearAttach() { pendingAttachments = []; renderAttach(); }
 
   function closeChatAddMenu() {
     byId('chat-add-menu').hidden = true;
@@ -1352,7 +1376,7 @@ JS = r'''
     }
   });
 
-  // 🗂 Vault内ファイルを対話のソースに選ぶ（2026-09-14）。/upload と同じ pendingAttachment に
+  // 🗂 Vault内ファイルを対話のソースに選ぶ（2026-09-14）。/upload と同じ pendingAttachments に
   // 収束させるので、送信側(sendFollowup)は一切触らない＝ソースが増えるだけ。
   // /files/search はサーバー側で VAULT_INDEX を軽量フィールドだけ検索して返す（/files/data の
   // 全件ロードは持ち込まない）。
@@ -1396,7 +1420,7 @@ JS = r'''
     });
   }
   function selectVaultFile(it) {
-    pendingAttachment = { name: it.title, path: it.path };
+    pendingAttachments.push({ name: it.title, path: it.path });
     renderAttach();
     closeVaultPicker();
   }
@@ -1504,21 +1528,49 @@ JS = r'''
     inp.setSelectionRange(inp.value.length, inp.value.length);
   }
 
-  function onFilePick(input) {  // ファイル選択 → /upload に生バイナリ POST → パス受領
-    const file = input.files && input.files[0];
+  function onFilePick(input) {
+    const files = Array.from(input.files || []);
     input.value = '';  // 同じファイルを連続選択できるように毎回クリア
-    if (!file) return;
-    pendingAttachment = { name: file.name, uploading: true };
+    return uploadChatFiles(files);
+  }
+  function onChatPaste(event) {
+    const data = event.clipboardData;
+    if (!data) return;
+    let files = Array.from(data.files || []);
+    if (!files.length) files = Array.from(data.items || [])
+      .filter(item => item.kind === 'file').map(item => item.getAsFile()).filter(Boolean);
+    files = files.filter(file => file.type.startsWith('image/')
+      || (!file.type && /\.(png|jpe?g|webp|gif)$/i.test(file.name)));
+    if (!files.length) return;  // Leave ordinary text paste to the browser.
+    event.preventDefault();
+    const text = data.getData('text/plain');
+    if (text) {
+      const input = byId('chat-input');
+      input.setRangeText(text, input.selectionStart, input.selectionEnd, 'end');
+      rememberChatDraft();
+    }
+    uploadChatFiles(files);
+  }
+  async function uploadChatFiles(files) {
+    const batch = files.map(file => ({file, att:{name:file.name, uploading:true}}));
+    pendingAttachments.push(...batch.map(item => item.att));
     renderAttach();
-    fetch('/upload?name=' + encodeURIComponent(file.name),
-          { method: 'POST', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file })
-      .then(r => r.json())
-      .then(d => {
-        if (d.error) { pendingAttachment = null; renderAttach(); alert('添付に失敗: ' + d.error); return; }
-        pendingAttachment = { name: d.name, path: d.path };
-        renderAttach();
-      })
-      .catch(e => { pendingAttachment = null; renderAttach(); alert('添付に失敗: ' + e); });
+    for (const {file, att} of batch) {
+      if (!pendingAttachments.includes(att)) continue;
+      try {
+        const response = await fetch('/upload?name=' + encodeURIComponent(file.name),
+          {method:'POST', headers:{'Content-Type':file.type || 'application/octet-stream'}, body:file});
+        const data = await response.json();
+        if (!response.ok || data.error || !data.path)
+          throw new Error(data.error || 'HTTP ' + response.status);
+        att.name = data.name || file.name;
+        att.path = data.path;
+      } catch (error) {
+        att.error = error.message || 'Upload failed';
+      }
+      att.uploading = false;
+      if (pendingAttachments.includes(att)) renderAttach();
+    }
   }
   const MODEL_LABELS = __MODEL_LABELS__;
   const MODEL_EFFORT = __MODEL_EFFORT__;  // dashboard_model -> effort（/settingsと同じ永続値。ここで変えた分もローカルに反映していく）
@@ -1957,7 +2009,7 @@ JS = r'''
   function sendBtnStopState() {
     const tab = activeTabObj();
     return !!(tab && tab.jobId && !voiceChatOn()
-              && !byId('chat-input').value.trim() && !pendingAttachment);
+              && !byId('chat-input').value.trim() && !pendingAttachments.length);
   }
   function updateSendBtn() {
     const btn = byId('chat-send-btn');
@@ -1971,7 +2023,8 @@ JS = r'''
       if (stop) stopArmedAt = Date.now();
     }
     const tab = activeTabObj();
-    btn.disabled = stop && !!tab && stopRequestedJob === tab.jobId;
+    btn.disabled = (stop && !!tab && stopRequestedJob === tab.jobId)
+      || pendingAttachments.some(att => att.uploading || att.error);
     fitChatInput();
   }
 
@@ -2220,8 +2273,8 @@ JS = r'''
     return d;
   }
 
-  function openChat(label) {  // 自由入力チャット：プレフィルなしで開始（既存タブに中身があれば新規タブを割る。2026-10-13）
-    if (!shukiPrepareSessionTab()) return false;
+  function openChat(label, draft) {  // Optional draft is local input; only Send starts a reply.
+    if (!shukiPrepareSessionTab(typeof draft === 'string')) return false;
     voiceChat.end();
     exitWorkTab();
     byId('voice-bar').hidden = true;
@@ -2236,6 +2289,11 @@ JS = r'''
     activeTabObj().model = '';
     clearAttach();
     byId('chat-input-row').hidden = false;
+    if (typeof draft === 'string') {
+      byId('chat-input').value = draft;
+      rememberChatDraft();
+      updateSendBtn();
+    }
     byId('result').scrollIntoView({ behavior: 'smooth' });
     // Keep the software keyboard closed so touch users can choose voice first.
     if (shouldAutoFocusTextInput()) {
@@ -2436,10 +2494,11 @@ JS = r'''
     return false;
   }
 
-  function shukiPrepareSessionTab() {
+  function shukiPrepareSessionTab(preserveDraft) {
     const active = activeTabObj();
     if (!active) { ensureActiveTab(); return true; }
-    if (!active.session && !active.jobId && !activePane().children.length) return true;
+    if (!active.session && !active.jobId && !activePane().children.length
+        && (!preserveDraft || !byId('chat-input').value.trim())) return true;
     if (TABS.length >= MAX_TABS) {
       alert('Close an unused chat tab before opening another session.');
       return false;
@@ -2854,16 +2913,16 @@ JS = r'''
     stopSpeak();
     const inp = byId('chat-input');
     const text = inp.value.trim();
-    if (pendingAttachment && pendingAttachment.uploading) return false;  // アップロード完了まで待つ
-    const att = pendingAttachment;
-    if (!text && !att) return false;
+    if (pendingAttachments.some(att => att.uploading || att.error)) return false;
+    const attachments = pendingAttachments.slice();
+    if (!text && !attachments.length) return false;
     inp.value = '';
     rememberChatDraft();
     // 添付があれば text 先頭にパスを差し込む（claude -p が Read で読む）。ユーザー本文は温存
-    const sendText = att ? ('[添付ファイル: ' + att.path + ']\n' + text) : text;
-    pendingAttachment = null; renderAttach();
-    const attHtml = att ? '<div class="msg-att">' + UI_ICONS.attach + ' '
-      + att.name.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</div>' : '';
+    const sendText = attachments.map(att => '[添付ファイル: ' + att.path + ']\n').join('') + text;
+    clearAttach();
+    const attHtml = attachments.map(att => '<div class="msg-att">' + UI_ICONS.attach + ' '
+      + escapeHtml(att.name) + '</div>').join('');
     const tab = activeTabObj();
     if (tabBusy(tab)) { queueFollowup(tab, text, sendText, attHtml); updateSendBtn(); return false; }  // 返答後に送る
     addMsg('user', attHtml + mdlite(text || '(添付のみ)'), text || '(添付のみ)');
@@ -3344,6 +3403,10 @@ JS = r'''
       .then(d => {
         if (tabById(tab.id) !== tab || tab.session !== session || tab.jobId !== jobId) return false;
         if (d && d.id && d.status) {
+          // Foreground/online events can refetch the same latest job after it has already been
+          // rendered. Re-polling a completed job replaces the reply and plays chat_done again.
+          // Keep recovery for a still-running job, and let the watcher handle unseen job IDs.
+          if (automatic && d.id === tab.watchLastJobId && d.status !== 'running') return false;
           if (d.session) { tab.session = d.session; if (activeTabObj() === tab) chatSession = d.session; }
           const pane = paneOf(tab.id), last = pane.lastElementChild;
           const msgEl = last && last.classList.contains('assistant') ? last
@@ -3622,7 +3685,7 @@ JS = r'''
     const ex = e.target.closest('[data-exec-skill]');
     if (ex) { e.preventDefault(); exec(ex.dataset.execSkill, ex.dataset.execText || '', ex.dataset.execLabel || ''); return; }
     const oc = e.target.closest('[data-open-chat]');
-    if (oc) { e.preventDefault(); openChat(oc.dataset.openChat); return; }
+    if (oc) { e.preventDefault(); openChat(oc.dataset.openChat, oc.dataset.chatText); return; }
     const rh = e.target.closest('[data-resume-session]');
     // session が空文字の行は無人便（12:30便・AIレーン実行便）の実行結果で、再開できる
     // 対話が無い（2026-09-05・対話履歴への無人便統合）。クリックしても何もしない。
@@ -4123,6 +4186,7 @@ def dock_html():
         for v, label in MODELS
     )
     html_out = (shuki_i18n.tt_html(HTML, ctx="chat")
+                .replace("__UPLOAD_ACCEPT__", UPLOAD_ACCEPT)
                 .replace("__MODEL_SELECT__", model_select)
                 .replace("__EFFORT_SELECT__", effort_select)
                 .replace("__MODEL_CHIPS_PICK__", pick_chips))
